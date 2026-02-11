@@ -1,0 +1,13 @@
+{
+  "username": "Your username",
+  "password": "Your password",
+  "timeout": 10,
+  "api_key": "Your key",
+  "url": "https://uai.unipus.cn/sso/index.html?service=https%3A%2F%2Fucloud.unipus.cn%2Fhome",
+  "answer_strategy": "kimi",
+  "target_course": "新视野大学英语（第四版）读写教程1",
+  "learning_strategy": "learn_all",
+  "max_tokens": 2000,
+  "token_full": "{\"rt\":\"C3A1F6FCCC9066C424DC2CEFA05FD6FED5A2F5EC136F69E0844F322768717EAEC03662CDE2A2CE46A22317CCDCE1CFED\",\"jwt\":\"eyJhbGciOiJSUzI1NiIsImtpZCI6InVuaXB1cy1zc28ifQ.eyJqdGkiOiJMQVZiRXY0NUM1enJfRmJsYXM2b01RIiwiaWF0IjoxNzcwMzQzMjM5LCJleHAiOjE3NzA1MTYwMzksIm5iZiI6MTc3MDM0MzE3OSwiaXNzIjoiaHR0cHM6Ly9zc28udW5pcHVzLmNuIiwiYXVkIjoiY24udW5pcHVzLnNzby5qd3QiLCJzdWIiOiIxMDAwMDAwIiwib3BlbklkIjoiYWQ5ZjU3ZWJjMzc5NDI5NWIxMzk2YWFjOWE5NzZjOWYiLCJ1c2VybmFtZSI6IjE3NTM5MTYyMDA3Iiwibmlja25hbWUiOiJZY2hwcXVWVCIsInBob25lIjoiMTc1MzkxNjIwMDciLCJ0aW1lc3RhbXAiOjE3NzAzNDMyMzksImtleSI6InVuaXB1cy1zc28ifQ.PFzzg_LMkcJ_PGJVehclBn30IlqUPaQKRrnkHgNupoxU56V03KHxL22ExIjJ4jSIO7x_yOJ5Vcxiu6_KY1fO3Ypi9VnNbAsaKYGTWwdOAJq0hQ5S7YZ0M5dA0mFkAhglFW04h_JsbobsdiBA9XsjK0vJIxRvyRshyZW1I1d4uw_ICXuVkmkvR3_uQeZCYRZEaFPbsuJhjnq5GReJEB1wKYr_4FhPOAVd39F6gDjMSIJdBA7MOgIJQNM80uUyRl7ejeyp2MjHxgrQtzIAibxu-lnzq772k3DFGJNXVyX7iOxZvQ_8h29eSaGLVGESIUKAURnZ1KcmAzdND5_ivRNndA\",\"rtExpire\":1772935239,\"jwtExpire\":1770516039,\"links\":[{\"rel\":\"self\",\"href\":\"http://sso.unipus.cn/ssoserviceTicket/validate\"}]}",
+  "temperature": 0.3
+}
