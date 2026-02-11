@@ -25,7 +25,12 @@
 1. 把"Your username"替换为你的账号，把"Your password"替换为你的密码
 2. 把“Your api"替换为你在[KIMI开放平台](https://platform.moonshot.cn/docs/guide/start-using-kimi-api)申请的API KEY
 3. 两种学习策略，"learn_all"为学习所有课程，“learn_all_compulsory_course”为学习必修课
-
+## 关于U校园ai版的防作弊机制
+- 我已破解
+- 只需手动在浏览器登陆账号，然后打开开发者窗口在控制台输入localStorage.getItem('__token')
+把获取的token粘贴到config.json中的token_full中
+- 此token会不定期更新，如果发现登陆进去是白屏，那么需要更新token
+- 截止到2026/2/11，config.json里默认的token仍可以使用
 ## 📜 许可证
 
 本项目在[MIT License](LICENSE)下发布。
