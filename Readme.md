@@ -21,10 +21,15 @@
 ## 环境依赖
 - 本项目需要Python环境
 - 需要安装Microsoft Edge浏览器和Microsoft Edge WebDriver驱动程序[点击下载](https://developer.microsoft.com/zh-cn/microsoft-edge/tools/webdriver)
+## 使用方法
+1. 在PyCharm或其他IDE中克隆此仓库
+2. 运行``` pip install -r requirements.txt ```安装依赖
+3. 修改config.json
+4. 运行Unipus_v1.0.py
 ## 在config.json里编辑配置
 1. 把"Your username"替换为你的账号，把"Your password"替换为你的密码
 2. 把“Your api"替换为你在[KIMI开放平台](https://platform.moonshot.cn/docs/guide/start-using-kimi-api)申请的API KEY
-3. 两种学习策略，"learn_all"为学习所有课程，“learn_all_compulsory_course”为学习必修课
+3. 两种学习策略,"learn_all"为学习所有课程，“learn_all_compulsory_course”为学习必修课
 ## 关于U校园ai版的防作弊机制
 - 我已破解
 - 只需手动在浏览器登陆账号，然后打开开发者窗口在控制台输入localStorage.getItem('__token')
