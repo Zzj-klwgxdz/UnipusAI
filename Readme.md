@@ -22,10 +22,13 @@
 - 本项目需要Python环境
 - 需要安装Microsoft Edge浏览器和Microsoft Edge WebDriver驱动程序[点击下载](https://developer.microsoft.com/zh-cn/microsoft-edge/tools/webdriver)
 ## 使用方法
+### 对于想要了解代码的用户
 1. 在PyCharm或其他IDE中克隆此仓库
 2. 运行``` pip install -r requirements.txt ```安装依赖
 3. 修改config.json
 4. 运行Unipus_v1.0.py
+### 对于只想要体验程序功能的用户
+只需要下载右侧release里的压缩包，解压后编辑config.json，运行即可
 ## 在config.json里编辑配置
 1. 把"Your username"替换为你的账号，把"Your password"替换为你的密码
 2. 把“Your api"替换为你在[KIMI开放平台](https://platform.moonshot.cn/docs/guide/start-using-kimi-api)申请的API KEY
