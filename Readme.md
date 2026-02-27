@@ -28,7 +28,7 @@
 3. 修改config.json
 4. 运行Unipus_v1.0.py
 ### 对于只想要体验程序功能的用户
-只需要下载右侧release里的压缩包，解压后编辑config.json，运行即可
+只需要下载右侧release里的dist.zip，解压后编辑config.json，运行即可
 ## 在config.json里编辑配置
 1. 把"Your username"替换为你的账号，把"Your password"替换为你的密码
 2. 把“Your api"替换为你在[KIMI开放平台](https://platform.moonshot.cn/docs/guide/start-using-kimi-api)申请的API KEY
