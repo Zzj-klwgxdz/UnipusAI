@@ -3899,7 +3899,7 @@ class UCampusBot:
             login_btn = self.driver.find_element(By.XPATH,
                                                  '//*[@id="rc-tabs-0-panel-1"]/form/div[4]/div/div/div/div/button')
             login_btn.click()
-            time.sleep(1.5)
+            input("如果出现验证码需要手动验证通过后在这里按回车，没有则直接按回车")
             self.anti_anti_cheat()
             time.sleep(3)
             try:
