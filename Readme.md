@@ -28,7 +28,8 @@
 3. 修改config.json
 4. 运行Unipus_v1.0.py
 ### 对于只想要体验程序功能的用户
-只需要下载右侧release里的dist.zip，解压后编辑config.json，运行exe即可
+- 只需要下载右侧release里的dist.zip，解压后编辑config.json，运行exe即可
+- 仍然需要安装Microsoft Edge浏览器和Microsoft Edge WebDriver驱动程序[点击下载](https://developer.microsoft.com/zh-cn/microsoft-edge/tools/webdriver)
 ## 注意：启动后严禁一切操作，否则可能导致程序异常
 ## 在config.json里编辑配置
 1. 把"Your username"替换为你的账号，把"Your password"替换为你的密码
