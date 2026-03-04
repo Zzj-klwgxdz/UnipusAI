@@ -38,7 +38,7 @@
 4. full_token需要改为自己的token，详见《关于U校园ai版的防作弊机制》
 ## 关于U校园ai版的防作弊机制
 - 我已破解
-- 手动在浏览器登陆账号，然后打开开发者窗口在控制台输入localStorage.getItem('__token')
+- 手动在浏览器登陆账号，然后打开开发者窗口在控制台输入localStorage.getItem('__token')后按回车
 把获取的token粘贴到config.json中的token_full中（注意格式一致）
 - 此token会不定期更新，如果发现登陆进去是白屏，那么需要更新token
 
