@@ -1,0 +1,89 @@
+[15:46:32] [INFO] [write:90]
+📄 详细日志保存至: D:\UnipusAI\logs\ucampus_2026-03-05_15-46-32.log
+
+[15:46:40] [INFO] [write:90]
+如果出现验证码需要手动验证通过后在这里按回车，没有则直接按回车
+
+[15:46:57] [INFO] [write:90]
+没有找到防作弊弹窗，已跳过
+
+[15:46:57] [INFO] [write:90]
+✅ 登录成功
+
+[15:46:59] [INFO] [write:90]
+🚀 首次进入模式：扫描课程目录...
+
+[15:47:00] [ERROR] [write:86]
+❌ 首次进入失败: Message: no such element: Unable to locate element: {"method":"css selector","selector":"p[title='新视
+
+[15:47:00] [ERROR] [_first_entry:3613]
+详细错误: Message: no such element: Unable to locate element: {"method":"css selector","selector":"p[title='新视野大学英语（第四版）读写教程1']"}
+  (Session info: MicrosoftEdge=145.0.3800.82); For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#nosuchelementexception
+Stacktrace:
+Symbols not available. Dumping unresolved backtrace:
+	0x7ff7cd526835
+	0x7ff7cd526894
+	0x7ff7cd86ad2a
+	0x7ff7cd2c3696
+	0x7ff7cd2c3935
+	0x7ff7cd2ba35c
+	0x7ff7cd2ba307
+	0x7ff7cd2ba20d
+	0x7ff7cd2ba307
+	0x7ff7cd2ff1e7
+	0x7ff7cd2b9a1c
+	0x7ff7cd2b8c76
+	0x7ff7cd2b9843
+	0x7ff7cd380564
+	0x7ff7cd37ca03
+	0x7ff7cd38d0c3
+	0x7ff7cd540f18
+	0x7ff7cd5497f6
+	0x7ff7cd52de74
+	0x7ff7cd52dfb9
+	0x7ff7cd51bdf2
+	0x7ffa73dfe8d7
+	0x7ffa74ecc40c
+
+Traceback (most recent call last):
+  File "D:\UnipusAI\Unipus_v1.0.py", line 3576, in _first_entry
+    target = all_course.find_element(By.CSS_SELECTOR, f"p[title='{self.config.target_course}']")
+  File "D:\UnipusAI\.venv\Lib\site-packages\selenium\webdriver\remote\webelement.py", line 532, in find_element
+    return self._execute(Command.FIND_CHILD_ELEMENT, {"using": by, "value": value})["value"]
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\UnipusAI\.venv\Lib\site-packages\selenium\webdriver\remote\webelement.py", line 508, in _execute
+    return self._parent.execute(command, params)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "D:\UnipusAI\.venv\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 432, in execute
+    self.error_handler.check_response(response)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "D:\UnipusAI\.venv\Lib\site-packages\selenium\webdriver\remote\errorhandler.py", line 232, in check_response
+    raise exception_class(message, screen, stacktrace)
+selenium.common.exceptions.NoSuchElementException: Message: no such element: Unable to locate element: {"method":"css selector","selector":"p[title='新视野大学英语（第四版）读写教程1']"}
+  (Session info: MicrosoftEdge=145.0.3800.82); For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#nosuchelementexception
+Stacktrace:
+Symbols not available. Dumping unresolved backtrace:
+	0x7ff7cd526835
+	0x7ff7cd526894
+	0x7ff7cd86ad2a
+	0x7ff7cd2c3696
+	0x7ff7cd2c3935
+	0x7ff7cd2ba35c
+	0x7ff7cd2ba307
+	0x7ff7cd2ba20d
+	0x7ff7cd2ba307
+	0x7ff7cd2ff1e7
+	0x7ff7cd2b9a1c
+	0x7ff7cd2b8c76
+	0x7ff7cd2b9843
+	0x7ff7cd380564
+	0x7ff7cd37ca03
+	0x7ff7cd38d0c3
+	0x7ff7cd540f18
+	0x7ff7cd5497f6
+	0x7ff7cd52de74
+	0x7ff7cd52dfb9
+	0x7ff7cd51bdf2
+	0x7ffa73dfe8d7
+	0x7ffa74ecc40c
+

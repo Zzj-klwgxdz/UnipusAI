@@ -1,10 +1,11 @@
-import hashlib,json,logging,os,sys,random,re,threading,time
+import hashlib,json,logging,os,sys,random,re,threading,time,warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
 from glob import glob
 from typing import List, Optional, Dict, Any, Tuple, Callable
+
 from openai import OpenAI
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, StaleElementReferenceException
@@ -12,7 +13,15 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from webbrowser import open as wopen
+from AudioRecognizer import *
+
+# ==================== 标记弃用方法 ====================
+def deprecated(func):
+    def wrapper(*args, **kwargs):
+        warnings.warn(f"Function {func.__name__} is deprecated and will be removed in future versions.", DeprecationWarning, stacklevel=2)
+        return func(*args, **kwargs)
+    return wrapper
+
 
 # ==================== 日志配置 ====================
 def setup_logging():
@@ -115,6 +124,7 @@ class Config:
     temperature: float
     max_tokens: int
     timeout: int
+    whisper_api: str
 
     @classmethod
     def from_json(cls, path: str = "config.json") -> "Config":
@@ -133,6 +143,7 @@ class Config:
             temperature=data.get("temperature", 0.3),
             max_tokens=data.get("max_tokens", 2000),
             timeout=data.get("timeout", 10),
+            whisper_api = data.get("whisper_api",None)
 
         )
 
@@ -149,11 +160,13 @@ class QuestionType(Enum):
     VOCABULARY_FLASHCARD = auto()
     BANKED_CLOZE = auto()
     VOCABULARY_TEST = auto()  # 词汇测试（英汉互译）
-    VIDEO_ONLY = auto()  # 纯视频页面
+    VIDEO = auto()  # 纯视频页面
     VIDEO_POPUP = auto()  # 视频带有弹窗问题
     DISCUSSION_BOARD = auto()
     DROPDOWN_SELECT = auto()
+    LISTENING_FILL_IN = auto()
     UNKNOWN = auto()
+
 
 
 @dataclass
@@ -180,7 +193,7 @@ class Question:
 
     def is_interactive(self) -> bool:
         """是否有交互元素"""
-        if self.q_type in [QuestionType.VIDEO_ONLY,
+        if self.q_type in [QuestionType.VIDEO,
                            QuestionType.VOCABULARY_FLASHCARD,  # 闪卡需要交互
                            QuestionType.DISCUSSION_BOARD]:
             return True
@@ -484,6 +497,7 @@ class KimiClient:
         return True
     def ask(self, prompt: str, retry_count: int = 3) -> Optional[str]:
         """发送问题并获取回答"""
+        print(f"当前ai对话历史共{len(self.conversation_history)}条")
         for attempt in range(retry_count):
             try:
                 messages = [
@@ -559,17 +573,22 @@ class QuestionParserStrategy(ABC):
 class QuestionParser:
     """题目解析器 - 使用策略模式"""
 
-    def __init__(self, driver):
+    def __init__(self, driver,whisper_api_key: Optional[str] = None):
         self.driver = driver
         # 按优先级注册策略
         # 若日志显示没有匹配的策略，可能在这里没有注册
+        listening_strategy = ListeningFillInStrategy(
+            api_key=whisper_api_key,  # None 表示使用本地模型
+            use_local=True  # 默认使用本地模型
+        )
         self.strategies: List[QuestionParserStrategy] = [
-            VideoOnlyStrategy(),
+            VideoStrategy(),
             DiscussionBoardStrategy(),
             VocabularyFlashcardStrategy(),
             VocabularyTestStrategy(),
             DropdownSelectStrategy(),
             BankedClozeStrategy(),
+            ListeningFillInStrategy(),  # 新增：听力填空
             StandardChoiceStrategy(),
             TextInputStrategy(),
             FillInStrategy(),
@@ -965,19 +984,20 @@ class VocabularyTestStrategy(QuestionParserStrategy):
     def parse(self, container, driver, question_number: int, directions: str = "") -> Optional[Question]:
         title_elem = WebDriverHelper.safe_find_element(driver, Selectors.QUESTION_TITLE, container)
         text = title_elem.text.strip() if title_elem else ""
-        # 关键修复：将 directions 合并到题目文本中
-        full_text = text
-        if directions:
-            full_text = f"【题目要求】{directions}\n\n{text}"
+
+        # 修复：不再在这里添加 directions，让 PromptBuilder 统一处理
+        # if directions:
+        #     full_text = f"【题目要求】{directions}\n\n{text}"
 
         options = self._extract_options(container, driver)
 
         return Question(
             number=question_number,
-            text=full_text,
+            text=text,  # 只保留纯题目文本
             q_type=QuestionType.VOCABULARY_TEST,
             element=container,
-            options=options
+            options=options,
+            directions=directions  # 保存到 directions 字段，由 PromptBuilder 决定是否添加
         )
 
     def _extract_options(self, container, driver) -> List[Option]:
@@ -1145,37 +1165,35 @@ class StandardChoiceStrategy(QuestionParserStrategy):
             choices = container.find_elements(By.CSS_SELECTOR, '.question-common-abs-choice')
             choice_container = choices[0] if choices else container
 
-        # 提取题目文本
         title_elem = choice_container.find_element(By.CSS_SELECTOR, '.ques-title')
         text = title_elem.text.strip() if title_elem else ""
-        # 关键修复：构建完整题目文本（directions + 阅读材料 + 题目）
-        full_text = self._build_full_text(container, driver, text, directions)
-        # 提取选项
+
+        # 修复：不再调用 _build_full_text 提前添加 directions
+        # full_text = self._build_full_text(container, driver, text, directions)
+
+        # 只提取纯题目文本，directions 由 PromptBuilder 统一处理
         vocab_strategy = VocabularyTestStrategy()
         options = vocab_strategy._extract_options(container, driver)
 
         # 判断单选还是多选
-        # 方法1：检查是否有checkbox
         checkboxes = container.find_elements(By.CSS_SELECTOR, 'input[type="checkbox"]')
-
-        # 方法2：检查题目文本或类名
         is_multi = (
                 checkboxes or
                 'multipleChoice' in (container.get_attribute('class') or '').lower() or
                 '多选' in text or
-                len(options) > 4  # 超过4个选项可能是多选
+                len(options) > 4
         )
-
         q_type = QuestionType.MULTIPLE_CHOICE if is_multi else QuestionType.SINGLE_CHOICE
 
         return Question(
             number=question_number,
-            text=full_text,
+            text=text,  # 纯题目文本
             q_type=q_type,
             element=container,
-            options=options  # direction已在text里，不传directions
+            options=options,
+            directions=directions  # 保存到字段
         )
-
+    @deprecated
     def _build_full_text(self, container, driver, question_text: str, directions: str) -> str:
         """构建完整题目文本：directions + 阅读材料 + 题目"""
         parts = []
@@ -1192,7 +1210,7 @@ class StandardChoiceStrategy(QuestionParserStrategy):
         parts.append(f"【问题】{question_text}")
 
         return "\n\n".join(parts)
-
+    @deprecated
     def _extract_material(self, container, driver) -> str:
         """提取阅读材料 - 带缓存"""
         # 如果已有缓存，直接返回
@@ -1251,7 +1269,7 @@ class TextInputStrategy(QuestionParserStrategy):
             return False
 
         # ========== 情况2：大容器（未被拆分）==========
-        # 关键：检查是否包含material（写作题和阅读题都有）
+        # 检查是否包含material（写作题和阅读题都有）
         has_material = container.find_elements(By.CSS_SELECTOR, '.layout-material-container')
 
         if has_material:
@@ -1508,6 +1526,220 @@ class TextInputStrategy(QuestionParserStrategy):
             pass
 
         return material_text
+
+
+class ListeningFillInStrategy(QuestionParserStrategy):
+    """听力填空题解析策略 - 使用 Whisper 语音识别"""
+
+    def __init__(self, api_key: Optional[str] = None, use_local: bool = True):
+        """
+        Args:
+            api_key: OpenAI API Key（可选）
+            use_local: 默认使用本地模型（无需 API Key，推荐）
+        """
+        # 默认使用本地模型，避免 API 费用和限制
+        self.transcriber = AudioTranscriber(api_key=api_key, use_local=use_local)
+        self._current_transcript: Optional[str] = None
+
+    def can_parse(self, container, driver) -> bool:
+        # 关键特征1：包含音频材料
+        has_audio = bool(
+            container.find_elements(By.CSS_SELECTOR, '.audio-material-wrapper, .question-audio') or
+            container.find_elements(By.TAG_NAME, 'audio')
+        )
+
+        # 关键特征2：包含fe-scoop填空
+        has_scoop_blanks = bool(
+            container.find_elements(By.CSS_SELECTOR, '.fe-scoop input')
+        )
+
+        # 关键特征3：不是选词填空（没有选项池）
+        has_option_pool = bool(
+            container.find_elements(By.CSS_SELECTOR, '.option-wrapper, .banked-options')
+        )
+
+        # 可选：进一步验证确实是听力题（检查direction关键词）
+        is_listening = False
+        if has_audio and has_scoop_blanks:
+            try:
+                direction_elem = container.find_element(By.CSS_SELECTOR, '.layout-direction-container, .abs-direction')
+                direction_text = direction_elem.text.lower()
+                listening_keywords = ['listen', 'hear', 'audio', 'talk', 'speech', 'conversation']
+                is_listening = any(kw in direction_text for kw in listening_keywords)
+            except:
+                pass
+
+        return has_audio and has_scoop_blanks and not has_option_pool and is_listening
+
+    def parse(self, container, driver, question_number: int, directions: str = "") -> Optional[Question]:
+        try:
+            # 提取音频URL
+            audio_url = self._extract_audio_url(container)
+            audio_info = self._extract_audio_info(container, audio_url)
+
+            # 获取转录文本
+            transcript = ""
+            if audio_url:
+                duration = audio_info.get('duration', 0)
+
+                # 根据时长选择识别方式
+                if duration > 120:  # 超过2分钟使用分段识别
+                    transcript = self.transcriber.transcribe_long_audio(
+                        audio_url,
+                        language="en",
+                        chunk_length=30
+                    )
+                else:
+                    transcript = self.transcriber.transcribe(
+                        audio_url,
+                        language="en"
+                    )
+
+                self._current_transcript = transcript
+
+            # 提取所有填空
+            inputs = []
+            blank_contexts = []
+
+            scoops = container.find_elements(By.CSS_SELECTOR, '.fe-scoop')
+
+            for i, scoop in enumerate(scoops):
+                try:
+                    input_box = scoop.find_element(By.CSS_SELECTOR, 'input')
+                    inputs.append(input_box)
+
+                    # 获取带填空标记的句子
+                    sentence = self._get_sentence_with_blank(scoop)
+
+                    blank_contexts.append({
+                        'index': i,
+                        'sentence': sentence,
+                        'input': input_box,
+                        'scoops_index': scoop.get_attribute('data-scoop-index') or str(i)
+                    })
+
+                except Exception as e:
+                    logger.debug(f"解析听力填空 {i} 失败: {e}")
+                    continue
+
+            # 构建题目文本
+            full_text = self._build_prompt(directions, audio_info, transcript, blank_contexts)
+
+            return Question(
+                number=question_number,
+                text=full_text,
+                q_type=QuestionType.LISTENING_FILL_IN,
+                element=container,
+                inputs=inputs,
+                banked_blanks=blank_contexts,
+                directions=directions,
+            )
+
+        except Exception as e:
+            error_msg = str(e)
+            print(f"      ⚠️ 听力题解析失败: {error_msg[:50]}")
+            logger.error(f"详细错误: {error_msg}", exc_info=True)
+            return None
+
+    def _extract_audio_url(self, container) -> Optional[str]:
+        """提取音频URL"""
+        try:
+            audio_elem = container.find_element(By.CSS_SELECTOR, 'audio')
+            src = audio_elem.get_attribute('src')
+            if src:
+                # 清理URL
+                src = src.split('#')[0]
+                return src
+        except:
+            pass
+
+        try:
+            sources = container.find_elements(By.CSS_SELECTOR, 'audio source')
+            for source in sources:
+                src = source.get_attribute('src')
+                if src:
+                    return src.split('#')[0]
+        except:
+            pass
+
+        return None
+
+    def _extract_audio_info(self, container, audio_url: Optional[str]) -> Dict:
+        """提取音频信息"""
+        info = {'title': '', 'duration': 0, 'url': audio_url or ''}
+
+        try:
+            audio_elem = container.find_element(By.CSS_SELECTOR, 'audio')
+            info['title'] = audio_elem.get_attribute('title') or ''
+
+            # 从URL解析duration
+            if audio_url:
+                match = re.search(r'duration=([\d.]+)', audio_url)
+                if match:
+                    info['duration'] = float(match.group(1))
+        except:
+            pass
+
+        return info
+
+    def _get_sentence_with_blank(self, scoop) -> str:
+        """获取带填空标记的句子"""
+        try:
+            p_elem = scoop.find_element(By.XPATH, './ancestor::p')
+            html_content = p_elem.get_attribute('innerHTML')
+
+            # 将所有fe-scoop替换为____
+            marked = re.sub(
+                r'<span class="fe-scoop".*?</span>',
+                '____',
+                html_content,
+                flags=re.DOTALL
+            )
+
+            # 清理HTML
+            text = re.sub(r'<[^>]+>', '', marked)
+            text = re.sub(r'\s+', ' ', text).strip()
+
+            return text
+
+        except:
+            return scoop.text.strip() or "____"
+
+    def _build_prompt(self, directions: str, audio_info: Dict,
+                      transcript: str, blanks: List[Dict]) -> str:
+        """构建AI提示词"""
+        parts = [f"【听力填空题】"]
+
+        if directions:
+            parts.append(f"\n【题目要求】{directions}")
+
+        parts.append(f"\n【音频信息】")
+        if audio_info.get('title'):
+            parts.append(f"标题: {audio_info['title']}")
+        if audio_info.get('duration'):
+            parts.append(f"时长: {int(audio_info['duration'])}秒")
+
+        # 识别的原文（Whisper 准确率很高，可以直接用）
+        if transcript:
+            parts.append(f"\n【音频原文】\n{transcript}")
+            parts.append(f"\n【答题指导】")
+            parts.append("以上文本由AI语音识别生成，准确率较高。")
+            parts.append("请根据原文内容，填写以下空格。答案应直接来自原文。")
+        else:
+            parts.append(f"\n【答题指导】")
+            parts.append("⚠️ 未能识别音频内容。")
+            parts.append("请根据句子上下文、语法和常识推断答案。")
+
+        # 填空题目
+        parts.append(f"\n【填空题目】")
+        for blank in blanks:
+            parts.append(f"{blank['index'] + 1}. {blank['sentence']}")
+
+        parts.append(f"\n【回答格式】")
+        parts.append("格式: 1.answer1 2.answer2 3.answer3...")
+        parts.append("注意: 答案应简洁，直接填写听到的内容。")
+
+        return "\n".join(parts)
 class FillInStrategy(QuestionParserStrategy):
     """填空题解析策略 - 严格排除写作题"""
 
@@ -1560,8 +1792,8 @@ class FillInStrategy(QuestionParserStrategy):
         # 清理题号
         text = re.sub(r"^\d+[.、)\]]\s*", "", text)
 
-        if directions:
-            text = f"【题目要求】{directions}\n\n{text}"
+        # if directions:
+        #     text = f"【题目要求】{directions}\n\n{text}"
         # 提取所有输入框（严格限定为input，不是textarea）
         inputs = WebDriverHelper.safe_find_elements(driver, self.FILL_INPUTS, container)
 
@@ -1579,8 +1811,8 @@ class FillInStrategy(QuestionParserStrategy):
         )
 
 
-class VideoOnlyStrategy(QuestionParserStrategy):
-    """纯视频页面检测策略 - 修复版本"""
+class VideoStrategy(QuestionParserStrategy):
+    """纯视频页面检测策略"""
 
     def can_parse(self, container, driver) -> bool:
         # 检测视频元素
@@ -1624,7 +1856,7 @@ class VideoOnlyStrategy(QuestionParserStrategy):
         return Question(
             number=question_number,
             text="视频观看页面",
-            q_type=QuestionType.VIDEO_ONLY,
+            q_type=QuestionType.VIDEO,
             element=container
         )
 
@@ -1732,24 +1964,24 @@ class PromptBuilder:
 
     def __init__(self, kimi_client=None):  # 添加参数
         self.kimi = kimi_client  # 保存引用
+
     def build(self, questions: List[Question], global_directions: str = "") -> str:
         """构建Prompt - 支持题目级和全局 directions"""
         lines = []
+
         # 说明有多篇材料
         if len(self.kimi.accumulated_passages) > 1:
             lines.append(f"【注意】本章节共有 {len(self.kimi.accumulated_passages)} 篇阅读材料，请根据问题判断使用哪篇。")
             lines.append("")
 
-        if global_directions:
-            lines.append(f"题目指示：{global_directions}\n")
-        # 使用第一个题目的 directions（通常所有题目相同），或全局 directions
-        if questions:
-            effective_directions = questions[0].directions or global_directions
-        else:
-            effective_directions = global_directions
+        # 关键修复：只添加一次 directions，优先使用 global_directions
+        effective_directions = global_directions
+        if not effective_directions and questions:
+            effective_directions = questions[0].directions  # 回退到题目自带的 directions
 
         if effective_directions:
-            lines.append(f"题目指示：{effective_directions}\n")
+            lines.append(f"【题目指示】{effective_directions}")
+            lines.append("")  # 空行分隔
 
         # 检测题型组合
         type_counts = {}
@@ -1800,11 +2032,30 @@ class PromptBuilder:
             QuestionType.MULTIPLE_CHOICE: self._build_multiple_choice,
             QuestionType.FILL_IN: self._build_fill_in,
             QuestionType.TEXT: self._build_text,
-            QuestionType.VIDEO_ONLY: lambda q: [],  # 视频页无题目
+            QuestionType.VIDEO: lambda q: [],  # 视频页无题目
             QuestionType.VOCABULARY_FLASHCARD: lambda q: [],  # 闪卡无题目
+            QuestionType.LISTENING_FILL_IN: self._build_listening_fill_in,
         }
         return builders.get(q_type, self._build_unknown)
 
+    def _build_listening_fill_in(self, q: Question) -> List[str]:
+        """构建听力填空题Prompt"""
+        lines = [
+            f"{q.number}. 【听力填空题】",
+            f"{q.text}",
+            "",
+            "【答题要求】",
+            "1. 这是一个听力理解题，请根据句子上下文和逻辑填写最合适的单词或短语",
+            "2. 每个空填写一个简洁的答案（单词或短句）",
+            "3. 注意语法正确性和上下文连贯性",
+            ""
+        ]
+
+        for blank in q.banked_blanks:
+            lines.append(f"   空{blank['index'] + 1}: {blank['sentence']}")
+
+        lines.append("")
+        return lines
     def _build_vocab_test(self, q: Question) -> List[str]:
         """构建词汇测试题"""
         lines = [f"{q.number}. 【词汇题】{q.text}"]
@@ -1894,7 +2145,7 @@ class PromptBuilder:
         lines = [f"{q.number}. 【简答题】{q.text}"]
         if len(q.inputs) > 1:
             lines.append(f"   （共 {len(q.inputs)} 小题）")
-        lines.append("   （请提供简洁准确的回答，100词以内）")
+        lines.append("   （请提供简洁准确的回答，如果不是翻译题，那么只用英文回答）")
         lines.append("")
         return lines
 
@@ -1979,6 +2230,7 @@ class AnswerExecutor:
             QuestionType.DROPDOWN_SELECT: self._fill_dropdown_select,
             QuestionType.FILL_IN: self._fill_fill_in,
             QuestionType.TEXT: self._fill_text,
+            QuestionType.LISTENING_FILL_IN: self._fill_listening_fill_in,
         }
 
         executor = executors.get(question.q_type, self._fill_unknown)
@@ -2267,7 +2519,7 @@ class AnswerExecutor:
         pattern = r'\d+\s*[.、\)\]]\s*(.+?)(?=\s*\d+\s*[.、\)\]]|$)'
         matches = re.findall(pattern, answer, re.DOTALL)
 
-        print(f"    [调试] 正则匹配结果数: {len(matches)}")
+        print(f"    [调试] 正则表达式匹配结果数: {len(matches)}")
 
         if matches and len(matches) >= expected_count:
             for i, content in enumerate(matches[:expected_count]):
@@ -2437,6 +2689,29 @@ class AnswerExecutor:
             f"成功 {success_count}/{len(q.banked_blanks)} 个"
         )
 
+    def _fill_listening_fill_in(self, q: Question, answer: str) -> AnswerResult:
+        """填写听力填空 - 与普通填空类似，但使用句子上下文解析"""
+        # 使用banked_cloze的解析逻辑（支持 "1.xxx 2.xxx" 格式）
+        answers = self._parse_banked_answer(answer, len(q.inputs))
+
+        print(f"\t解析答案: {answers}")
+        print(f"\t输入框数量: {len(q.inputs)}")
+
+        success_count = 0
+        for i, (blank_info, ans) in enumerate(zip(q.banked_blanks, answers)):
+            if ans and blank_info['input']:
+                print(f"\t空{i + 1}: {ans}")
+                # 使用句子上下文验证答案合理性（可选）
+                WebDriverHelper.simulate_typing(self.driver, blank_info['input'], ans)
+                success_count += 1
+
+        return AnswerResult(
+            success_count > 0,
+            q.number,
+            answer,
+            f"填写 {success_count}/{len(q.inputs)} 个空"
+        )
+
     def _force_select_by_js(self, select_wrapper, value: str) -> bool:
         """强制通过JavaScript设置值（备选方案）"""
         try:
@@ -2560,21 +2835,58 @@ class DiscussionBoardHandler(ContentHandler):
 
 
 class VideoHandler(ContentHandler):
-    """视频处理器 - 自动播放并等待"""
+    """视频处理器 - 自动播放并智能回答弹窗问题"""
 
-    def __init__(self, driver):
+    def __init__(self, driver, config: Config):
         self.driver = driver
+        self.config = config
         self.popup_monitor_thread = None
         self.stop_monitoring = threading.Event()
+
+        # 初始化语音识别器（优先使用本地模型，避免API费用）
+        self.transcriber = AudioTranscriber(
+            api_key=config.whisper_api,
+            use_local=True  # 默认使用本地模型，更稳定
+        )
+
+        # 轻量级AI客户端用于分析弹窗答案（不污染主Kimi的历史记录）
+        self.analyzer_client = OpenAI(
+            api_key=config.api_key,
+            base_url=config.base_url
+        )
+
+        self.video_transcript = ""  # 存储视频转录文本
+        self.current_video_url = ""  # 当前视频URL，用于缓存判断
+
     def can_handle(self, question: Question) -> bool:
-        return question.q_type == QuestionType.VIDEO_ONLY
+        return question.q_type == QuestionType.VIDEO
 
     def handle(self, question: Question) -> bool:
+        """处理视频页面"""
         # 检查是否已完成
         if self._check_video_completed():
             print("    ✅ 视频已标记为完成，跳过")
             return True
+
         print("    🎬 视频页面，开始处理...")
+
+        # 获取视频信息
+        video_info = self._get_video_info()
+        if not video_info:
+            print("      ⚠️ 未找到视频元素")
+            return True
+
+        video_url = video_info.get('url', '')
+        duration = video_info.get('duration', 0)
+
+        # 检查是否已有缓存的转录结果（同一视频不重复识别）
+        if video_url and video_url == self.current_video_url and self.video_transcript:
+            print(f"    📦 使用已缓存的视频转录（{len(self.video_transcript)}字符）")
+        else:
+            # 新的视频，进行转录
+            self.current_video_url = video_url
+            self.video_transcript = self._transcribe_video(video_url, duration)
+
         # 启动弹窗监视线程
         self.stop_monitoring.clear()
         self.popup_monitor_thread = threading.Thread(
@@ -2582,103 +2894,170 @@ class VideoHandler(ContentHandler):
             daemon=True
         )
         self.popup_monitor_thread.start()
-        videos = self.driver.find_elements(By.TAG_NAME, 'video')
-        if not videos:
-            videos = self.driver.find_elements(By.CSS_SELECTOR, '.video-js video, .vjs-tech')
 
-        if not videos:
-            print("      ⚠️ 未找到视频元素")
-            self.stop_monitoring.set()
-            return True  # 仍然标记为已处理，避免卡住
-
-        for i, video in enumerate(videos):
-            try:
-                # 获取视频时长
-                duration = self.driver.execute_script("return arguments[0].duration;", video)
-                if duration and duration > 0:
-                    print(f"      视频 {i + 1} 时长: {int(duration)}秒")
-
-                    # 设置倍速播放
-                    self.driver.execute_script("""
-                        arguments[0].playbackRate = 2.0;
-                        arguments[0].muted = true;
-                        arguments[0].play();
-                    """, video)
-
-                    # 等待视频播放完成
-                    self._wait_for_video_complete(video, duration)
-
-                    # 检查当前播放时间
-                    current_time = self.driver.execute_script("return arguments[0].currentTime;", video)
-                    print(f"      ✓ 已播放 {int(current_time)}/{int(duration)} 秒")
-
-                else:
-                    # 无法获取时长，播放10秒
-                    self.driver.execute_script("""
-                        arguments[0].playbackRate = 2.0;
-                        arguments[0].muted = true;
-                        arguments[0].play();
-                    """, video)
-                    print(f"      ⏳ 等待 10 秒...")
-                    time.sleep(10)
-
-            except Exception as e:
-                error_msg = str(e)
-                print(f"      ⚠️ 视频 {i + 1} 处理失败: {error_msg[:50]}")
-                logger.error(f"详细错误: {error_msg}", exc_info=True)  # 详细堆栈保存到文件
-                continue
+        # 播放视频
+        self._play_video(duration)
 
         print("    ✅ 视频处理完成")
         self.stop_monitoring.set()
+
+        # 等待监视线程结束
+        if self.popup_monitor_thread.is_alive():
+            self.popup_monitor_thread.join(timeout=5)
+
         return True
 
+    def _get_video_info(self) -> Optional[Dict]:
+        """获取视频信息"""
+        try:
+            video = self.driver.find_element(By.TAG_NAME, 'video')
+            url = video.get_attribute('src') or ''
+
+            # 如果没有src，尝试source标签
+            if not url:
+                sources = video.find_elements(By.TAG_NAME, 'source')
+                for source in sources:
+                    url = source.get_attribute('src')
+                    if url:
+                        break
+
+            duration = self.driver.execute_script("return arguments[0].duration;", video)
+
+            return {
+                'url': url,
+                'duration': duration or 0,
+                'element': video
+            }
+        except:
+            return None
+
+    def _transcribe_video(self, video_url: str, duration: float) -> str:
+        """转录视频音频"""
+        if not video_url:
+            return ""
+
+        print(f"    🎙️ 开始识别视频音频（时长: {int(duration)}秒）...")
+
+        try:
+            # 根据时长选择识别方式
+            if duration > 120:  # 超过2分钟分段处理
+                transcript = self.transcriber.transcribe_long_audio(
+                    video_url,
+                    language="en",
+                    chunk_length=30
+                )
+            else:
+                transcript = self.transcriber.transcribe(
+                    video_url,
+                    language="en"
+                )
+
+            if transcript:
+                preview = transcript[:200] + "..." if len(transcript) > 200 else transcript
+                print(f"    ✅ 识别成功: {preview}")
+                return transcript
+            else:
+                print("    ⚠️ 未能识别音频内容")
+                return ""
+
+        except Exception as e:
+            print(f"    ❌ 音频识别失败: {str(e)[:50]}")
+            return ""
+
+    def _play_video(self, duration: float):
+        """播放视频"""
+        try:
+            video = self.driver.find_element(By.TAG_NAME, 'video')
+
+            if duration > 0:
+                print(f"      ▶️ 播放视频（{int(duration)}秒，2倍速）...")
+                self.driver.execute_script("""
+                    arguments[0].playbackRate = 2.0;
+                    arguments[0].muted = true;
+                    arguments[0].play();
+                """, video)
+
+                # 等待播放完成
+                self._wait_for_video_complete(video, duration)
+            else:
+                # 未知时长，播放10秒
+                self.driver.execute_script("""
+                    arguments[0].playbackRate = 2.0;
+                    arguments[0].muted = true;
+                    arguments[0].play();
+                """, video)
+                print(f"      ⏳ 等待 10 秒...")
+                time.sleep(10)
+
+        except Exception as e:
+            print(f"      ⚠️ 视频播放失败: {str(e)[:50]}")
+
     def _monitor_popup_questions(self):
-        """后台线程：监视视频弹窗题目并自动选择C"""
+        """后台线程：监视视频弹窗题目并智能回答"""
         print("      [监视器] 开始监视弹窗...")
-        check_interval = 0.5  # 每0.5秒检查一次
+        check_interval = 0.5
+        processed_popups = set()  # 避免重复处理同一弹窗
 
         while not self.stop_monitoring.is_set():
             try:
-                # 查找弹窗题目 - 基于你提供的HTML结构
                 popup = self._find_popup_question()
 
                 if popup and popup.is_displayed():
-                    print("      [监视器] 🔔 检测到弹窗题目！")
+                    # 生成弹窗唯一标识
+                    popup_id = self._get_popup_id(popup)
 
-                    # 尝试点击C选项
-                    success = self._click_option_c(popup)
+                    if popup_id in processed_popups:
+                        # 已处理过的弹窗，跳过
+                        time.sleep(0.5)
+                        continue
+
+                    print("      [监视器] 🔔 检测到新弹窗题目！")
+
+                    # 解析弹窗内容
+                    question_data = self._parse_popup_question(popup)
+
+                    if not question_data:
+                        print("      [监视器] ⚠️ 未能解析题目")
+                        continue
+
+                    # 确定答案
+                    if self.video_transcript and question_data['options']:
+                        answer = self._intelligent_select_answer(question_data)
+                    else:
+                        # 无转录文本或无法解析，随机选择
+                        answer = self._random_select(question_data)
+                        print(f"      [监视器] 🎲 随机选择: {answer}")
+
+                    # 点击答案
+                    success = self._click_option(popup, answer)
 
                     if success:
-                        print("      [监视器] ✓ 已选择C选项")
-                        # 等待弹窗消失
-                        time.sleep(1.0)
-                        # 尝试点击提交/确认按钮
-                        self._click_submit_if_exists()
-                    else:
-                        print("      [监视器] ⚠️ 未能点击C选项")
+                        print(f"      [监视器] ✓ 已选择: {answer}")
+                        processed_popups.add(popup_id)
 
-                    # 等待弹窗完全处理
-                    time.sleep(1.0)
+                        # 尝试提交
+                        time.sleep(0.5)
+                        self._click_submit_if_exists(popup)
+                        time.sleep(1.0)  # 等待弹窗关闭
+                    else:
+                        print(f"      [监视器] ❌ 点击失败: {answer}")
 
             except Exception as e:
-                # 静默处理错误，避免影响主线程
+                # 静默处理，避免影响主线程
                 pass
 
-            # 等待下次检查
             self.stop_monitoring.wait(check_interval)
 
         print("      [监视器] 已停止")
 
-    def _find_popup_question(self):
-        """查找视频弹窗题目元素"""
+    def _find_popup_question(self) -> Optional[Any]:
+        """查找视频弹窗题目"""
         selectors = [
             '.video-box .popupBox .questionReplyBox',
             '.popupBox .question-common-abs-choice',
             '.questionReplyBox .question-common-abs-choice',
-            # 备选选择器
-            '.video-box .popupBox',
-            '.popupBox:has(.question-common-abs-choice)',
-            '.questionReplyBox',
+            '.video-popup .question-common-abs-choice',
+            '.popupBox:has(.option)',  # 有选项的弹窗
         ]
 
         for selector in selectors:
@@ -2686,110 +3065,297 @@ class VideoHandler(ContentHandler):
                 elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
                 for elem in elements:
                     if elem.is_displayed():
-                        # 进一步确认是否包含选项
+                        # 确认包含选项
                         options = elem.find_elements(By.CSS_SELECTOR, '.option, .option-wrap .option')
                         if len(options) >= 2:
                             return elem
             except:
                 continue
-
         return None
 
-    def _click_option_c(self, popup_container) -> bool:
-        """在弹窗中点击C选项"""
+    def _get_popup_id(self, popup) -> str:
+        """生成弹窗唯一标识"""
         try:
-            # 方法1：直接查找caption为C的选项
-            option_c = popup_container.find_element(
-                By.CSS_SELECTOR,
-                '.option .caption[text()="C"], .option:has(.caption:contains("C"))'
-            )
-            # 向上找到可点击的option元素
-            option_element = option_c.find_element(By.XPATH, './ancestor::div[contains(@class, "option")]')
-
-            if option_element and option_element.is_displayed():
-                self._safe_click_element(option_element)
-                return True
-
+            # 使用题目文本+选项文本的哈希
+            text = popup.text
+            return hashlib.md5(text[:200].encode()).hexdigest()[:16]
         except:
-            pass
+            return str(time.time())
 
+    def _parse_popup_question(self, popup) -> Optional[Dict]:
+        """解析弹窗中的题目和选项"""
         try:
-            # 方法2：查找所有选项，按索引选第3个（C对应索引2）
-            options = popup_container.find_elements(By.CSS_SELECTOR, '.option.isNotReview, .option-wrap .option')
-
-            # 先尝试按字母找C
-            for opt in options:
+            # 提取题目
+            title_selectors = ['.ques-title', '.question-title', '.title', '.question-stem']
+            title = ""
+            for sel in title_selectors:
                 try:
-                    caption = opt.find_element(By.CSS_SELECTOR, '.caption')
-                    if caption.text.strip().upper() == 'C':
-                        self._safe_click_element(opt)
-                        return True
+                    elem = popup.find_element(By.CSS_SELECTOR, sel)
+                    title = elem.text.strip()
+                    if title:
+                        break
                 except:
                     continue
 
-            # 如果没找到，按索引选第3个（A=0, B=1, C=2）
-            if len(options) >= 3:
-                option_c = options[2]
-                self._safe_click_element(option_c)
-                return True
+            # 提取选项
+            option_elems = popup.find_elements(By.CSS_SELECTOR,
+                                               '.option.isNotReview, .option-wrap .option, .choice-option')
+
+            options = []
+            for i, opt_elem in enumerate(option_elems):
+                try:
+                    # 选项字母
+                    letter_selectors = ['.caption', '.index', '.option-label', '.choice-label']
+                    letter = ""
+                    for sel in letter_selectors:
+                        try:
+                            letter_elem = opt_elem.find_element(By.CSS_SELECTOR, sel)
+                            letter = letter_elem.text.strip().replace('.', '').replace(')', '').upper()
+                            if letter:
+                                break
+                        except:
+                            continue
+
+                    if not letter:
+                        letter = chr(65 + i)  # A, B, C, D...
+
+                    # 选项内容
+                    content_selectors = ['.content', '.option-content', '.text', '.choice-text']
+                    content = ""
+                    for sel in content_selectors:
+                        try:
+                            content_elem = opt_elem.find_element(By.CSS_SELECTOR, sel)
+                            content = content_elem.text.strip()
+                            if content:
+                                break
+                        except:
+                            continue
+
+                    if not content:
+                        content = opt_elem.text.strip()
+
+                    options.append({
+                        'letter': letter,
+                        'text': content,
+                        'element': opt_elem
+                    })
+
+                except:
+                    continue
+
+            if not options:
+                return None
+
+            return {
+                'question': title,
+                'options': options
+            }
 
         except Exception as e:
-            print(f"      [监视器] 点击C失败: {str(e)[:50]}")
+            print(f"      [监视器] 解析失败: {str(e)[:50]}")
+            return None
 
-        return False
+    def _intelligent_select_answer(self, question_data: Dict) -> str:
+        """基于视频内容智能选择答案"""
+        question = question_data['question']
+        options = question_data['options']
 
-    def _safe_click_element(self, element):
-        """安全点击元素"""
+        print(f"      [监视器] 🤖 分析问题: {question[:50]}...")
+
+        # 构建分析提示
+        prompt = self._build_analysis_prompt(question, options)
+
         try:
-            # 滚动到可视区域
-            self.driver.execute_script(
-                "arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});",
-                element
+            # 调用AI分析
+            response = self.analyzer_client.chat.completions.create(
+                model="kimi-k2-turbo-preview",  # 轻量级模型即可
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是视频理解助手。根据视频内容选择最正确的答案，只返回选项字母，不要解释。"
+                    },
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                max_tokens=5
             )
-            time.sleep(0.2)
 
-            # 尝试普通点击
-            try:
-                element.click()
-            except:
-                # 失败则用JS点击
-                self.driver.execute_script("arguments[0].click();", element)
+            answer_text = response.choices[0].message.content.strip().upper()
+
+            # 从回答中提取字母
+            valid_letters = [opt['letter'] for opt in options]
+            for letter in valid_letters:
+                if letter in answer_text:
+                    print(f"      [监视器] ✨ AI选择: {letter}")
+                    return letter
+
+            # 如果没找到，使用关键词匹配备选
+            return self._keyword_match(question, options)
 
         except Exception as e:
-            raise e
+            print(f"      [监视器] ⚠️ AI分析失败: {str(e)[:50]}，使用关键词匹配")
+            return self._keyword_match(question, options)
 
-    def _click_submit_if_exists(self):
-        """点击提交/确认按钮（如果存在）"""
+    def _build_analysis_prompt(self, question: str, options: List[Dict]) -> str:
+        """构建AI分析提示词"""
+        # 截断视频文本，避免过长
+        transcript = self.video_transcript[:2000] if len(self.video_transcript) > 2000 else self.video_transcript
+
+        prompt = f"""【视频内容】
+        {transcript}
+        
+        【问题】
+        {question}
+        
+        【选项】
+        """
+        for opt in options:
+            prompt += f"{opt['letter']}. {opt['text']}\n"
+
+        prompt += """
+        【任务】
+        根据视频内容，选择最正确的答案。只返回选项字母（如：A 或 B），不要任何解释。
+        
+        答案："""
+
+        return prompt
+
+    def _keyword_match(self, question: str, options: List[Dict]) -> str:
+        """基于关键词匹配选择答案（备选策略）"""
+        # 将问题和选项与视频文本匹配
+        transcript_lower = self.video_transcript.lower()
+        question_lower = question.lower()
+
+        best_option = None
+        best_score = -1
+
+        for opt in options:
+            opt_text = opt['text'].lower()
+
+            # 计算匹配分数
+            score = 0
+
+            # 1. 选项文本在视频中的出现次数
+            score += transcript_lower.count(opt_text) * 2
+
+            # 2. 选项关键词（长度>3的词）匹配
+            keywords = [w for w in opt_text.split() if len(w) > 3]
+            for kw in keywords:
+                if kw in transcript_lower:
+                    score += 1
+
+            # 3. 与问题的相关性（简单判断）
+            if any(word in question_lower for word in opt_text.split()[:3]):
+                score += 3
+
+            if score > best_score:
+                best_score = score
+                best_option = opt
+
+        if best_option:
+            print(f"      [监视器] 🔍 关键词匹配: {best_option['letter']} (得分: {best_score})")
+            return best_option['letter']
+
+        # 默认选第一个
+        return options[0]['letter'] if options else "A"
+
+    def _random_select(self, question_data: Dict) -> str:
+        """随机选择答案"""
+        options = question_data.get('options', [])
+        if not options:
+            return "C"
+        import random
+        choice = random.choice(options)
+        return choice['letter']
+
+    def _click_option(self, popup, answer: str) -> bool:
+        """点击指定选项"""
+        try:
+            # 查找对应字母的选项
+            option_elems = popup.find_elements(By.CSS_SELECTOR,
+                                               '.option.isNotReview, .option-wrap .option')
+
+            for opt_elem in option_elems:
+                try:
+                    # 获取选项字母
+                    letter_selectors = ['.caption', '.index', '.option-label']
+                    letter = ""
+                    for sel in letter_selectors:
+                        try:
+                            letter_elem = opt_elem.find_element(By.CSS_SELECTOR, sel)
+                            letter = letter_elem.text.strip().replace('.', '').replace(')', '').upper()
+                            if letter:
+                                break
+                        except:
+                            continue
+
+                    if letter == answer.upper():
+                        # 滚动到可视区域并点击
+                        self.driver.execute_script(
+                            "arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});",
+                            opt_elem
+                        )
+                        time.sleep(0.2)
+
+                        # 尝试点击
+                        try:
+                            opt_elem.click()
+                        except:
+                            self.driver.execute_script("arguments[0].click();", opt_elem)
+
+                        return True
+
+                except:
+                    continue
+
+            # 如果没找到，尝试按索引点击（A=0, B=1...）
+            try:
+                idx = ord(answer.upper()) - ord('A')
+                if 0 <= idx < len(option_elems):
+                    opt_elem = option_elems[idx]
+                    self.driver.execute_script(
+                        "arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});",
+                        opt_elem
+                    )
+                    time.sleep(0.2)
+                    opt_elem.click()
+                    return True
+            except:
+                pass
+
+            return False
+
+        except Exception as e:
+            print(f"      [监视器] 点击失败: {str(e)[:50]}")
+            return False
+
+    def _click_submit_if_exists(self, popup):
+        """点击提交按钮"""
         submit_selectors = [
-            '.popupBox .submit-btn',
-            '.questionReplyBox .submit-btn',
-            '.popupBox button[type="submit"]',
-            '.popupBox .confirm-btn',
-            '.popup-submit',
-            '.questionReplyBox button',
+            '.submit-btn', '.confirm-btn', '.ok-btn',
+            'button[type="submit"]', '.popup-submit',
+            '.questionReplyBox .submit'
         ]
 
         for selector in submit_selectors:
             try:
-                btn = self.driver.find_element(By.CSS_SELECTOR, selector)
+                btn = popup.find_element(By.CSS_SELECTOR, selector)
                 if btn.is_displayed():
-                    self._safe_click_element(btn)
-                    print("      [监视器] ✓ 已点击提交按钮")
+                    btn.click()
+                    print("      [监视器] ✓ 已提交")
                     return True
             except:
                 continue
-
         return False
 
-    def _wait_for_video_complete(self, video, duration):
-        """等待视频播放完成，同时保持弹窗监视"""
+    def _wait_for_video_complete(self, video, duration: float):
+        """等待视频播放完成"""
         max_wait = duration / 2 + 30  # 考虑2倍速
         start_time = time.time()
-        last_progress_print = 0
+        last_progress = 0
 
         while time.time() - start_time < max_wait:
             try:
-                # 检查是否需要停止
                 if self.stop_monitoring.is_set():
                     break
 
@@ -2800,30 +3366,25 @@ class VideoHandler(ContentHandler):
                     print(f"      ✓ 视频播放完成")
                     break
 
-                # 每5秒报告一次进度
+                # 每5秒报告进度
                 elapsed = int(time.time() - start_time)
-                if elapsed - last_progress_print >= 5:
+                if elapsed - last_progress >= 5:
                     print(f"      播放进度: {int(current)}/{int(duration)} 秒")
-                    last_progress_print = elapsed
+                    last_progress = elapsed
 
-                # 短暂休眠，让出时间给监视线程
                 time.sleep(0.5)
 
-            except Exception as e:
-                logger.error(f"视频等待错误: {e}")
+            except:
                 break
 
     def _check_video_completed(self) -> bool:
-        """检查视频是否已被标记为完成"""
+        """检查视频是否已完成"""
         try:
-            # 查找完成标记（根据实际页面结构调整）
-            completed_indicators = [
-                '.video-completed',
-                '.watched',
-                '[class*="completed"]',
-                '[class*="finished"]'
+            indicators = [
+                '.video-completed', '.watched', '.finished',
+                '[class*="completed"]', '[class*="finished"]'
             ]
-            for indicator in completed_indicators:
+            for indicator in indicators:
                 if self.driver.find_elements(By.CSS_SELECTOR, indicator):
                     return True
             return False
@@ -2920,11 +3481,11 @@ class AISolver:
         self.driver = driver
         self.config = config
         self.kimi = KimiClient(self.config)
-        self.parser = QuestionParser(driver)
+        self.parser = QuestionParser(driver,self.config.whisper_api)
         self.prompt_builder = PromptBuilder(self.kimi)
         self.executor = AnswerExecutor(driver)
         self.content_handlers: List[ContentHandler] = [
-            VideoHandler(driver),  # 纯视频
+            VideoHandler(driver,self.config),  # 纯视频
             FlashcardHandler(driver),
             DiscussionBoardHandler(driver),
         ]
@@ -2944,7 +3505,10 @@ class AISolver:
 
         for l1_idx, l1_tab in enumerate(level1_tabs):
             print(f"📂 一级Tab [{l1_idx}]: {l1_tab['title']}")
-
+            #切换一级TAB时清空ai对话历史
+            if l1_idx > 0:
+                self.kimi.force_reset(f"{chapter_name}_{l1_tab['title']}")
+                print(f"   🔄 切换一级Tab，已清空AI对话历史")
             if not WebDriverHelper.safe_click(self.driver, l1_tab['element']):
                 continue
             time.sleep(1.5)
@@ -3031,7 +3595,7 @@ class AISolver:
                         print(f"    🎯 使用 {handler.__class__.__name__} 处理")
                         handler.handle(q)
                         special_handled = True
-                        if q.q_type in [QuestionType.VOCABULARY_FLASHCARD, QuestionType.VIDEO_ONLY]:
+                        if q.q_type in [QuestionType.VOCABULARY_FLASHCARD, QuestionType.VIDEO]:
                             print(f"   ✅ 特殊内容处理完成")
                             return True
                         break
@@ -3039,7 +3603,7 @@ class AISolver:
             # 过滤普通题目
             normal_questions = [q for q in questions if q.q_type not in [
                 QuestionType.VOCABULARY_FLASHCARD,
-                QuestionType.VIDEO_ONLY,
+                QuestionType.VIDEO,
                 QuestionType.DISCUSSION_BOARD
             ]]
 
@@ -3886,10 +4450,10 @@ class UCampusBot:
             self.driver.get(self.config.url)
             time.sleep(3)
             # 填写登录信息
-            username = WebDriverWait(self.driver, 10).until(
+            username = WebDriverWait(self.driver, 20).until(
                 EC.presence_of_element_located((By.XPATH, '//*[@id="username"]')))
             password = self.driver.find_element(By.XPATH, '//*[@id="password"]')
-            agreement_check = WebDriverWait(self.driver, 10).until(
+            agreement_check = WebDriverWait(self.driver, 20).until(
                 EC.presence_of_element_located((By.XPATH, '//*[@id="agreement"]')))
             username.send_keys(self.config.username)
             password.send_keys(self.config.password)
@@ -3899,7 +4463,7 @@ class UCampusBot:
             login_btn = self.driver.find_element(By.XPATH,
                                                  '//*[@id="rc-tabs-0-panel-1"]/form/div[4]/div/div/div/div/button')
             login_btn.click()
-            input("如果出现验证码需要手动验证通过后在这里按回车，没有则直接按回车")
+            input("如有验证码，请手动输入验证码后在此处回车；如没有则直接按回车")
             self.anti_anti_cheat()
             time.sleep(3)
             try:
@@ -3989,9 +4553,7 @@ class PopupWatcher:
 if __name__ == '__main__':
     print('*' * 25 + "U校园AI答题" + '*' * 25)
     print("\033[4;32m作者B站ID：看了吴钩系钓舟\033[m")
-    a = input('是否查看作者主页[Y/N]')
-    if a == 'Y' or a == 'y':
-        wopen("https://space.bilibili.com/556022848")
+    input('按任意键启动程序')
     logger, LOG_FILE = setup_logging()
     print(f"📄 详细日志保存至: {LOG_FILE}")
     bot = UCampusBot('config.json')

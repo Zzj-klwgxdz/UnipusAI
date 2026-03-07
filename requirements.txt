@@ -1,2 +1,4 @@
 openai
 selenium
+requests
+openai-whisper

@@ -9,5 +9,6 @@
   "learning_strategy": "learn_all",
   "max_tokens": 2000,
   "token_full": "{\"rt\":\"C3A1F6FCCC9066C.............ef\":\"http://sso.unipus.cn/ssoserviceTicket/validate\"}]}",
-  "temperature": 0.3
+  "temperature": 0.3,
+  "whisper_api": null
 }
