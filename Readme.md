@@ -47,10 +47,17 @@
 新增config编辑工具，位于
 ### /net10.0-windows/ConfigEditor.exe
 ## v2.0更新
-- 新增了以下题型的支持
+### <font color=red>注意，2.0及以后版本需要额外安装FFmpeg来实现网页音频和视频的解析</font>
+### 安装步骤
+1. 访问[此网站](https://github.com/BtbN/FFmpeg-Builds/releases)，下载ffmpeg-master-latest-win64-gpl.zip
+2. 将文件解压到任意目录，推荐C盘根目录
+3. 添加系统环境变量：<p></p>
+&emsp;首先按Win+R，输入sysdm.cpl,确定。<p></p>&emsp;然后点高级 ->环境变量 -> 在系统变量中找到Path,编辑 -> 新建 -> 输入你的解压的路径+\bin例如 <font color=red >C:\ffmpeg\bin </font> -> 一直点击确定即可
+
+### 新增了以下题型的支持，通过接入语音识别功能实现
 ![image](QQ20260307-183216.png)
-- 修复了部分情况下选择题ai调用失败的问题
-- 修复了有时阅读题答案用中文回答的问题
+### 修复了部分情况下选择题ai调用失败的问题
+### 修复了有时阅读题答案用中文回答的问题
 ## 📜 许可证
 
 本项目在[MIT License](LICENSE)下发布。
