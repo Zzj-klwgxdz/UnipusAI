@@ -5,16 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="5d802919-ac3a-4b38-99d7-3366dc9a2676" name="更改" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/.name" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/.name" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/UnipusAI.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/UnipusAI.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/modules.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Unipus_v1.0.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.dll" beforeDir="false" afterPath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.dll" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.exe" beforeDir="false" afterPath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.exe" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.pdb" beforeDir="false" afterPath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.pdb" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Readme.md" beforeDir="false" afterPath="$PROJECT_DIR$/Readme.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -32,9 +24,15 @@
 }]]></component>
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
-    "git-widget-placeholder": "main"
+    "git-widget-placeholder": "main",
+    "last_opened_file_path": "D:/UnipusAI"
   }
 }]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="D:\UnipusAI" />
+    </key>
+  </component>
   <component name="TaskManager">
     <servers />
   </component>
