@@ -36,6 +36,7 @@
 2. 把“Your api"替换为你在[KIMI开放平台](https://platform.moonshot.cn/docs/guide/start-using-kimi-api)申请的API KEY
 3. 两种学习策略,"learn_all"为学习所有课程，“learn_all_compulsory_course”为学习必修课
 4. full_token需要改为自己的token，详见《关于U校园ai版的防作弊机制》
+5. whisper_api用于语音识别的在线模式，一般情况下不用管，值为null时使用本地模型，初次启动程序时会自动下载本地模型
 ## 关于U校园ai版的防作弊机制
 - 我已破解
 - 手动在浏览器登陆账号，然后打开开发者窗口在控制台输入localStorage.getItem('__token')
