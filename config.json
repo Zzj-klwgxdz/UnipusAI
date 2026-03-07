@@ -1,0 +1,13 @@
+{
+  "username": "Your username",
+  "password": "Your password",
+  "timeout": 10,
+  "api_key": "Your key",
+  "url": "https://uai.unipus.cn/sso/index.html?service=https%3A%2F%2Fucloud.unipus.cn%2Fhome",
+  "answer_strategy": "kimi",
+  "target_course": "新视野大学英语（第四版）读写教程1",
+  "learning_strategy": "learn_all",
+  "max_tokens": 2000,
+  "token_full": "{\"rt\":\"C3A1F6FCCC9066C.............ef\":\"http://sso.unipus.cn/ssoserviceTicket/validate\"}]}",
+  "temperature": 0.3
+}
