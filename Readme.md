@@ -21,6 +21,7 @@
 ## 环境依赖
 - 本项目需要Python环境
 - 需要安装Microsoft Edge浏览器和Microsoft Edge WebDriver驱动程序[点击下载](https://developer.microsoft.com/zh-cn/microsoft-edge/tools/webdriver)
+- 2.0及以后版本需要额外安装FFmpeg来实现网页音频和视频的解析,详见v2.0更新
 ## 使用方法
 ### 对于想要了解代码的用户
 1. 在PyCharm或其他IDE中克隆此仓库
@@ -48,7 +49,7 @@
 新增config编辑工具，位于
 ### /net10.0-windows/ConfigEditor.exe
 ## v2.0更新
-### ![red](https://img.shields.io/badge/注意-red)2.0及以后版本需要额外安装FFmpeg来实现网页音频和视频的解析}
+### ![red](https://img.shields.io/badge/注意-red)2.0及以后版本需要额外安装FFmpeg来实现网页音频和视频的解析
 ### 安装步骤
 1. 访问[此网站](https://github.com/BtbN/FFmpeg-Builds/releases)，下载ffmpeg-master-latest-win64-gpl.zip
 2. 将文件解压到任意目录，推荐C盘根目录
