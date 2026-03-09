@@ -34,7 +34,8 @@
 ## 注意：启动后严禁一切操作，否则可能导致程序异常
 ## 在config.json里编辑配置
 1. 把"Your username"替换为你的账号，把"Your password"替换为你的密码
-2. 把“Your api"替换为你在[KIMI开放平台](https://platform.moonshot.cn/docs/guide/start-using-kimi-api)申请的API KEY
+2. 把“Your api"替换为你在[KIMI开放平台](https://platform.moonshot.cn/docs/guide/start-using-kimi-api)申请的API KEY(无需修改base_url和model)<p></p>或者任意支持openai接口的大模型api并修改相应的base_url和model
+
 3. 两种学习策略,"learn_all"为学习所有课程，“learn_all_compulsory_course”为学习必修课
 4. full_token需要改为自己的token，详见《关于U校园ai版的防作弊机制》
 5. whisper_api用于语音识别的在线模式，一般情况下不用管，值为null时使用本地模型，初次启动程序时会自动下载本地模型
@@ -60,6 +61,10 @@
 ![image](QQ20260307-183216.png)
 ### 修复了部分情况下选择题ai调用失败的问题
 ### 修复了有时阅读题答案用中文回答的问题
+## v2.1更新
+- 新增了环境检测
+- 增加了目标课程的模糊匹配
+- 修复了其他浏览器修改配置导致此程序异常
 ## 📜 许可证
 
 本项目在[MIT License](LICENSE)下发布。
