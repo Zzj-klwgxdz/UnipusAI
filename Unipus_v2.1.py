@@ -1,4 +1,6 @@
-import hashlib,json,logging,os,sys,random,re,threading,time,warnings
+from AudioRecognizer import *
+from EnvironmentChecker import *
+import hashlib, json, logging, os, sys, random, re, threading, time, warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -13,13 +15,16 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from AudioRecognizer import *
+
+
 
 # ==================== 标记弃用方法 ====================
 def deprecated(func):
     def wrapper(*args, **kwargs):
-        warnings.warn(f"Function {func.__name__} is deprecated and will be removed in future versions.", DeprecationWarning, stacklevel=2)
+        warnings.warn(f"Function {func.__name__} is deprecated and will be removed in future versions.",
+                      DeprecationWarning, stacklevel=2)
         return func(*args, **kwargs)
+
     return wrapper
 
 
@@ -143,7 +148,7 @@ class Config:
             temperature=data.get("temperature", 0.3),
             max_tokens=data.get("max_tokens", 2000),
             timeout=data.get("timeout", 10),
-            whisper_api = data.get("whisper_api",None)
+            whisper_api=data.get("whisper_api", None)
 
         )
 
@@ -166,7 +171,6 @@ class QuestionType(Enum):
     DROPDOWN_SELECT = auto()
     LISTENING_FILL_IN = auto()
     UNKNOWN = auto()
-
 
 
 @dataclass
@@ -495,6 +499,7 @@ class KimiClient:
 
         print(f"   📄 新增原文（{len(passage)}字符），当前共{len(self.accumulated_passages)}篇")
         return True
+
     def ask(self, prompt: str, retry_count: int = 3) -> Optional[str]:
         """发送问题并获取回答"""
         print(f"当前ai对话历史共{len(self.conversation_history)}条")
@@ -505,7 +510,7 @@ class KimiClient:
                     *self.conversation_history,
                     {"role": "user", "content": prompt}
                 ]
-                #调试
+                # 调试
                 # # ========== 打印AI收到的完整请求 ==========
                 # print("\n" + "=" * 60)
                 # print(" 发送给AI的完整消息：")
@@ -573,7 +578,7 @@ class QuestionParserStrategy(ABC):
 class QuestionParser:
     """题目解析器 - 使用策略模式"""
 
-    def __init__(self, driver,whisper_api_key: Optional[str] = None):
+    def __init__(self, driver, whisper_api_key: Optional[str] = None):
         self.driver = driver
         # 按优先级注册策略
         # 若日志显示没有匹配的策略，可能在这里没有注册
@@ -1133,6 +1138,7 @@ class BankedClozeStrategy(QuestionParserStrategy):
 class StandardChoiceStrategy(QuestionParserStrategy):
     def __init__(self):
         self._material_cache: Optional[str] = None  # 添加缓存
+
     def can_parse(self, container, driver) -> bool:
         # 关键修复：支持两种容器结构
         # 结构1：直接是 .question-common-abs-choice
@@ -1193,6 +1199,7 @@ class StandardChoiceStrategy(QuestionParserStrategy):
             options=options,
             directions=directions  # 保存到字段
         )
+
     @deprecated
     def _build_full_text(self, container, driver, question_text: str, directions: str) -> str:
         """构建完整题目文本：directions + 阅读材料 + 题目"""
@@ -1210,6 +1217,7 @@ class StandardChoiceStrategy(QuestionParserStrategy):
         parts.append(f"【问题】{question_text}")
 
         return "\n\n".join(parts)
+
     @deprecated
     def _extract_material(self, container, driver) -> str:
         """提取阅读材料 - 带缓存"""
@@ -1740,6 +1748,8 @@ class ListeningFillInStrategy(QuestionParserStrategy):
         parts.append("注意: 答案应简洁，直接填写听到的内容。")
 
         return "\n".join(parts)
+
+
 class FillInStrategy(QuestionParserStrategy):
     """填空题解析策略 - 严格排除写作题"""
 
@@ -1859,7 +1869,6 @@ class VideoStrategy(QuestionParserStrategy):
             q_type=QuestionType.VIDEO,
             element=container
         )
-
 
 
 class VocabularyFlashcardStrategy(QuestionParserStrategy):
@@ -2056,6 +2065,7 @@ class PromptBuilder:
 
         lines.append("")
         return lines
+
     def _build_vocab_test(self, q: Question) -> List[str]:
         """构建词汇测试题"""
         lines = [f"{q.number}. 【词汇题】{q.text}"]
@@ -2434,6 +2444,7 @@ class AnswerExecutor:
                     return clean
 
         return ""
+
     def _fill_text(self, q: Question, answer: str) -> AnswerResult:
         """填写文本题 - 修复版本：支持多小题分别填写"""
         if not q.inputs:
@@ -3203,10 +3214,10 @@ class VideoHandler(ContentHandler):
 
         prompt = f"""【视频内容】
         {transcript}
-        
+
         【问题】
         {question}
-        
+
         【选项】
         """
         for opt in options:
@@ -3215,7 +3226,7 @@ class VideoHandler(ContentHandler):
         prompt += """
         【任务】
         根据视频内容，选择最正确的答案。只返回选项字母（如：A 或 B），不要任何解释。
-        
+
         答案："""
 
         return prompt
@@ -3392,7 +3403,6 @@ class VideoHandler(ContentHandler):
             return False
 
 
-
 class FlashcardHandler(ContentHandler):
     """单词闪卡处理器 """
 
@@ -3481,21 +3491,22 @@ class AISolver:
         self.driver = driver
         self.config = config
         self.kimi = KimiClient(self.config)
-        self.parser = QuestionParser(driver,self.config.whisper_api)
+        self.parser = QuestionParser(driver, self.config.whisper_api)
         self.prompt_builder = PromptBuilder(self.kimi)
         self.executor = AnswerExecutor(driver)
         self.content_handlers: List[ContentHandler] = [
-            VideoHandler(driver,self.config),  # 纯视频
+            VideoHandler(driver, self.config),  # 纯视频
             FlashcardHandler(driver),
             DiscussionBoardHandler(driver),
         ]
         # 只存储已处理的内容哈希
         self.processed_hashes: set = set()
+
     def solve_current_chapter(self, chapter_name: str) -> bool:
         """处理当前章节的所有Tab - 累积原文模式"""
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"📚 开始处理章节: {chapter_name}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         # 只初始化章节，不发送原文
         self.kimi.start_new_chapter(chapter_name)
@@ -3505,7 +3516,7 @@ class AISolver:
 
         for l1_idx, l1_tab in enumerate(level1_tabs):
             print(f"📂 一级Tab [{l1_idx}]: {l1_tab['title']}")
-            #切换一级TAB时清空ai对话历史
+            # 切换一级TAB时清空ai对话历史
             if l1_idx > 0:
                 self.kimi.force_reset(f"{chapter_name}_{l1_tab['title']}")
                 print(f"   🔄 切换一级Tab，已清空AI对话历史")
@@ -3547,6 +3558,7 @@ class AISolver:
 
         # 不自动调用 start_new_chapter，让调用方控制
         return self._process_current_tab_content(self.kimi.current_chapter_id or "unknown", tab_name, l1_idx, l2_idx)
+
     def _process_current_tab_content(self, chapter_name: str, tab_name: str, l1_idx: int, l2_idx: int) -> bool:
         """处理当前Tab页面（支持动态加载的多页题目）"""
 
@@ -3688,6 +3700,7 @@ class AISolver:
             return ''.join(letters) if letters else line
 
         return ""
+
     def _generate_questions_signature(self, questions: List[Question]) -> str:
         """生成题目签名，用于检测内容变化"""
         if not questions:
@@ -4104,7 +4117,26 @@ class CourseLearner:
         self.solver = AISolver(driver, config)
         self.chapters: List[Dict] = []
         self.current_chapter_index: int = -1
+    def __del__(self):
+        """清理资源"""
+        try:
+            if self.popup_watcher:
+                self.popup_watcher.stop()
+        except:
+            pass
 
+        try:
+            if self.driver:
+                self.driver.quit()
+        except:
+            pass
+
+        for temp_dir in self.temp_dirs:
+            try:
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+            except:
+                pass
     def learn(self) -> bool:
         """主学习流程"""
         # 第一步：首次进入
@@ -4133,11 +4165,61 @@ class CourseLearner:
             course_page.click()
             time.sleep(1)
 
-            # 选择课程
-            all_course = WebDriverWait(self.driver, 10).until(
+            # 选择课程 - 使用模糊匹配
+            all_courses = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.CLASS_NAME, 'course-name'))
             )
-            target = all_course.find_element(By.CSS_SELECTOR, f"p[title='{self.config.target_course}']")
+
+            # 获取所有课程元素
+            course_elements = all_courses.find_elements(By.CSS_SELECTOR, "p[title]")
+
+            target = None
+            target_course_name = self.config.target_course.strip()
+
+            # 方法1：精确匹配（完全相等）
+            for elem in course_elements:
+                title = elem.get_attribute('title') or elem.text.strip()
+                if title == target_course_name:
+                    target = elem
+                    print(f"✅ 精确匹配到课程: {title}")
+                    break
+
+            # 方法2：模糊匹配（包含关系）
+            if not target:
+                for elem in course_elements:
+                    title = elem.get_attribute('title') or elem.text.strip()
+                    # 互相包含：配置包含页面标题，或页面标题包含配置
+                    if (target_course_name.lower() in title.lower() or
+                            title.lower() in target_course_name.lower()):
+                        target = elem
+                        print(f"✅ 模糊匹配到课程: {title}")
+                        break
+
+            # 方法3：关键词匹配（去除空格和特殊字符后比较）
+            if not target:
+                def normalize(text):
+                    # 去除空格、括号、特殊字符，转为小写
+                    return re.sub(r'[^\w\u4e00-\u9fff]', '', text.lower())
+
+                target_normalized = normalize(target_course_name)
+
+                for elem in course_elements:
+                    title = elem.get_attribute('title') or elem.text.strip()
+                    if normalize(title) == target_normalized:
+                        target = elem
+                        print(f"✅ 关键词匹配到课程: {title}")
+                        break
+
+            if not target:
+                # 打印所有可用课程供用户参考
+                print("❌ 未找到目标课程，可用课程列表:")
+                for i, elem in enumerate(course_elements[:10], 1):  # 最多显示10个
+                    title = elem.get_attribute('title') or elem.text.strip()
+                    print(f"   {i}. {title}")
+                if len(course_elements) > 10:
+                    print(f"   ... 还有 {len(course_elements) - 10} 个课程")
+                raise NoSuchElementException(f"未找到课程: {self.config.target_course}")
+
             target.click()
             time.sleep(2)
 
@@ -4171,10 +4253,9 @@ class CourseLearner:
             return True
 
         except Exception as e:
-            # 修复：正确打印异常信息，不要尝试对异常对象进行切片操作
             error_msg = str(e)
             print(f"❌ 首次进入失败: {error_msg[:100] if len(error_msg) > 100 else error_msg}")
-            logger.error(f"详细错误: {error_msg}", exc_info=True)  # 详细堆栈保存到文件
+            logger.error(f"详细错误: {error_msg}", exc_info=True)
             return False
 
     def _scan_all_chapters(self) -> bool:
@@ -4250,7 +4331,7 @@ class CourseLearner:
             print(f"\n➡️ 切换到: {next_chapter['name']}")
 
             if self._click_sidebar_chapter(next_chapter):
-                #删除AI对话历史
+                # 删除AI对话历史
                 self.solver.kimi.force_reset(next_chapter['name'])
                 # 更新索引
                 for i, ch in enumerate(self.chapters):
@@ -4412,27 +4493,197 @@ class CourseLearner:
 class UCampusBot:
     """U校园机器人 - 组装所有组件"""
 
-    def __init__(self, config_path: str = 'config.json'):
+    def __init__(self, config_path: str = 'config.json', skip_check: bool = False):
         self.config = Config.from_json(config_path)
+        self.temp_dirs: List[str] = []
+        self.driver = None
+        self.popup_watcher = None
+
+        # 环境检查
+        if not skip_check:
+            self._ensure_environment()
+
+        # 创建驱动
         self.driver = self._create_driver()
         self.popup_watcher = PopupWatcher(self.driver)
 
-    def __del__(self):
-        self.popup_watcher.stop()
-        self.driver.quit()
+    def _ensure_environment(self):
+        """确保环境就绪"""
+        checker = EnvironmentChecker()
+
+        if not checker.check_all():
+            # 环境有问题，进入修复流程
+            while True:
+                choice = checker.show_fix_guide()
+
+                if choice == '1':
+                    checker.auto_install_edge()
+                    sys.exit(0)
+
+                elif choice == '2':
+                    driver_manager = DriverManager()
+                    target_dir = os.path.expandvars(r'%LOCALAPPDATA%\U校园AI答题')
+                    os.makedirs(target_dir, exist_ok=True)
+
+                    driver_path = checker.auto_download_driver(target_dir)
+                    if driver_path:
+                        print("✅ 驱动准备完成，请重新运行程序")
+                        input("按回车键退出...")
+                        sys.exit(0)
+
+                elif choice == '3':
+                    # 新增：自动安装 FFmpeg
+                    if checker.auto_install_ffmpeg():
+                        sys.exit(0)
+
+                elif choice == '4':
+                    # 新增：添加 FFmpeg 到 PATH
+                    if checker.add_ffmpeg_to_path():
+                        sys.exit(0)
+
+                elif choice == '5':
+                    # 修改：支持 FFmpeg 路径
+                    edge_path, driver_path, ffmpeg_path = checker.manual_specify_path()
+
+                    if edge_path and os.path.exists(edge_path):
+                        print(f"✅ 已指定 Edge: {edge_path}")
+
+                    if driver_path:
+                        manager = DriverManager()
+                        saved_path = manager.save_driver(driver_path)
+                        print(f"✅ 驱动已保存: {saved_path}")
+                        print("请重新运行程序")
+                        input("按回车键退出...")
+                        sys.exit(0)
+
+                    # 新增：处理 FFmpeg 路径
+                    if ffmpeg_path:
+                        bin_dir = os.path.dirname(ffmpeg_path)
+                        checker._add_to_system_path(bin_dir)
+                        print(f"✅ FFmpeg 已添加到 PATH: {bin_dir}")
+                        print("请重新运行程序")
+                        input("按回车键退出...")
+                        sys.exit(0)
+
+                elif choice == '6':
+                    self._show_detailed_help()
+                    input("\n按回车键退出...")
+                    sys.exit(1)
+
+                elif choice == 'Q':
+                    sys.exit(1)
+
+                else:
+                    print("无效选项，请重新选择")
+
+    def _show_detailed_help(self):
+        """显示详细帮助（添加 FFmpeg 说明）"""
+        print("""
+    【问题诊断】
+
+    1. Edge 浏览器问题
+       原因：Edge 未安装或版本不匹配
+       解决：选择 [1] 自动安装，或访问 https://www.microsoft.com/edge
+
+    2. Edge 驱动问题
+       原因：msedgedriver.exe 未找到
+       解决：选择 [2] 自动下载，或手动放置到程序目录
+
+    3. FFmpeg 问题（语音识别必需）
+       原因：未安装 FFmpeg 或未添加到系统 PATH
+       解决：
+          - 方法A（推荐）：选择 [3] 自动下载安装（约130MB）
+          - 方法B：选择 [4] 将已安装的 FFmpeg 添加到 PATH
+          - 方法C：手动下载 https://ffmpeg.org/download.html
+            解压后将 bin 目录添加到系统环境变量 PATH
+
+    4. 验证 FFmpeg 安装
+       打开 CMD 输入: ffmpeg -version
+       应显示版本信息，如 "ffmpeg version 6.0"
+
+    【手动安装 FFmpeg 步骤】
+
+    1. 访问 https://ffmpeg.org/download.html
+    2. 点击 Windows 图标，选择 "Windows builds from gyan.dev"
+    3. 下载 "ffmpeg-release-essentials.zip"
+    4. 解压到 C:\ffmpeg
+    5. 将 C:\ffmpeg\bin 添加到系统环境变量 PATH
+    6. 重启终端，输入 ffmpeg -version 验证
+    """)
+
+
 
     def _create_driver(self):
         """创建WebDriver"""
+        # self._kill_edge_processes()
+
         options = webdriver.EdgeOptions()
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_argument("--start-maximized")
 
-        driver = webdriver.Edge(options=options)
+        temp_dir = tempfile.mkdtemp(prefix='ucampus_')
+        self.temp_dirs.append(temp_dir)
+        options.add_argument(f'--user-data-dir={temp_dir}')
+
+        driver = self._try_start_driver(options)
+
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
             "source": "Object.defineProperty(navigator, 'webdriver', {get: () => false});"
         })
+
         return driver
+
+    def _try_start_driver(self, options) -> webdriver.Edge:
+        """尝试启动驱动"""
+        errors = []
+
+        try:
+            from selenium.webdriver.edge.service import Service
+            from webdriver_manager.microsoft import EdgeChromiumDriverManager
+
+            service = Service(EdgeChromiumDriverManager().install())
+            return webdriver.Edge(service=service, options=options)
+        except Exception as e:
+            errors.append(f"自动管理: {str(e)[:40]}")
+
+        manager = DriverManager()
+        user_driver = manager.get_driver_path()
+        if user_driver:
+            try:
+                from selenium.webdriver.edge.service import Service
+                service = Service(user_driver)
+                return webdriver.Edge(service=service, options=options)
+            except Exception as e:
+                errors.append(f"用户驱动: {str(e)[:40]}")
+
+        bundled = get_resource_path('msedgedriver.exe')
+        if os.path.exists(bundled):
+            try:
+                from selenium.webdriver.edge.service import Service
+                service = Service(bundled)
+                return webdriver.Edge(service=service, options=options)
+            except Exception as e:
+                errors.append(f"自带驱动: {str(e)[:40]}")
+
+        try:
+            return webdriver.Edge(options=options)
+        except Exception as e:
+            errors.append(f"系统PATH: {str(e)[:40]}")
+
+        print("\n❌ 浏览器启动失败:")
+        for err in errors:
+            print(f"   - {err}")
+        raise Exception("无法启动 Edge 浏览器")
+
+    def _kill_edge_processes(self):
+        """结束 Edge 进程"""
+        try:
+            subprocess.run(['taskkill', '/F', '/IM', 'msedge.exe'],
+                           capture_output=True, check=False)
+            time.sleep(0.5)
+        except:
+            pass
+
 
     def start(self):
         """启动"""
@@ -4550,11 +4801,37 @@ class PopupWatcher:
     def stop(self):
         self.running = False
 
+
 if __name__ == '__main__':
     print('*' * 25 + "U校园AI答题" + '*' * 25)
     print("\033[4;32m作者B站ID：看了吴钩系钓舟\033[m")
-    input('按任意键启动程序')
+
+    skip_check = '--skip-check' in sys.argv
+
+    if not skip_check:
+        print("\n💡 提示：")
+        print("   - 首次运行需要检查环境")
+        print("   - 语音识别需要 FFmpeg（约130MB，可自动安装）")
+        print("   - 如检查通过但无法启动，使用 --skip-check 跳过")
+        print("   命令: U校园AI答题.exe --skip-check\n")
+
+    input('按任意键启动程序...')
+
     logger, LOG_FILE = setup_logging()
     print(f"📄 详细日志保存至: {LOG_FILE}")
-    bot = UCampusBot('config.json')
-    bot.start()
+
+    try:
+        bot = UCampusBot('config.json', skip_check=skip_check)
+        bot.start()
+    except Exception as e:
+        error_msg = str(e)
+        print(f"\n❌ 程序运行失败: {error_msg[:100]}")
+        logger.error(f"程序异常: {error_msg}", exc_info=True)
+
+        print("\n💡 建议：")
+        print("   1. 重新运行程序，选择环境修复选项")
+        print("   2. 以管理员身份运行程序")
+        print("   3. 关闭杀毒软件后重试")
+        print("   4. 查看日志文件获取详细信息")
+
+        input("\n按回车键退出...")

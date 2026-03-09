@@ -5,8 +5,14 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="5d802919-ac3a-4b38-99d7-3366dc9a2676" name="更改" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Readme.md" beforeDir="false" afterPath="$PROJECT_DIR$/Readme.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Unipus_v2.0.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/config.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.deps.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.dll" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.exe" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.pdb" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.runtimeconfig.json" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -16,18 +22,18 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="GithubPullRequestsUISettings"><![CDATA[{
-  "selectedUrlAndAccountId": {
-    "url": "https://github.com/Zzj-klwgxdz/UnipusAI.git",
-    "accountId": "a2aac714-b31c-4919-b231-3a772ee7c643"
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/Zzj-klwgxdz/UnipusAI.git&quot;,
+    &quot;accountId&quot;: &quot;a2aac714-b31c-4919-b231-3a772ee7c643&quot;
   }
-}]]></component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "git-widget-placeholder": "main",
-    "last_opened_file_path": "D:/UnipusAI"
+}</component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;last_opened_file_path&quot;: &quot;D:/UnipusAI&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="D:\UnipusAI" />

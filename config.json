@@ -1,14 +1,15 @@
 {
-  "username": "Your username",
-  "password": "Your password",
+  "username": "17539162007",
+  "password": "Zzj123456",
   "timeout": 10,
-  "api_key": "Your key",
   "url": "https://uai.unipus.cn/sso/index.html?service=https%3A%2F%2Fucloud.unipus.cn%2Fhome",
-  "answer_strategy": "kimi",
-  "target_course": "新视野大学英语（第四版）读写教程1",
-  "learning_strategy": "learn_all",
+  "api_key": "sk-xN2rp8tcpwsRADBIpRnPHtzSZK3zwZq3iviLFnlBxeLqt2b8",
+  "base_url": "https://api.moonshot.cn/v1",
+  "model": "kimi-k2-turbo-preview",
+  "target_course": "新视野大学英语（第四版）读写教程2",
+  "learning_strategy": "learn_all_compusory_course",
   "max_tokens": 2000,
-  "token_full": "{\"rt\":\"C3A1F6FCCC9066C.............ef\":\"http://sso.unipus.cn/ssoserviceTicket/validate\"}]}",
+  "token_full": "{\"rt\":\"C3A1F6FCCC9066C424DC2CEFA05FD6FED5A2F5EC136F69E0844F322768717EAEF43C79CB71DC84469BA3BFA757155003\",\"jwt\":\"eyJhbGciOiJSUzI1NiIsImtpZCI6InVuaXB1cy1zc28ifQ.eyJqdGkiOiJ2YU55eG9VTEtsQTZCUDU4S1dyVEhBIiwiaWF0IjoxNzczMDM0MTYwLCJleHAiOjE3NzMyMDY5NjAsIm5iZiI6MTc3MzAzNDEwMCwiaXNzIjoiaHR0cHM6Ly9zc28udW5pcHVzLmNuIiwiYXVkIjoiY24udW5pcHVzLnNzby5qd3QiLCJzdWIiOiIxMDAwMDAwIiwib3BlbklkIjoiYWQ5ZjU3ZWJjMzc5NDI5NWIxMzk2YWFjOWE5NzZjOWYiLCJ1c2VybmFtZSI6IjE3NTM5MTYyMDA3Iiwibmlja25hbWUiOiJZY2hwcXVWVCIsInBob25lIjoiMTc1MzkxNjIwMDciLCJ0aW1lc3RhbXAiOjE3NzMwMzQxNjAsImtleSI6InVuaXB1cy1zc28ifQ.aHCX1T4nQP-dOqKx6cHvMKEqXZjUV28_oVZHdbA7oYL9wlxru0lAglE2BRUOE2jaQSBkz-fR4jvzVg-5ggVtPmX2PPyf5Qekku7uGD1WzdHEGJsj9m2QZ57_X5UeEcm_qTBp08iDpXpOCflXaapxYUK6z-h6em-634ou4S_JQkeeCwMs-Yrq2PNXDxwhoDwMQv5HVJtyQ2IfNBsPjmEBDLCCdL86PlC6YXjI6-YN8AMUav2b7YdLC4u_vS4vEhOcnRjUoaAnAp7o1IAAE5C77JKG78cSm8tDKHZs1SwvKUFzpLB8qmcHqTAscr0rVz_Hl6yLaYvAKFFjOX023MS7RQ\",\"rtExpire\":1775626160,\"jwtExpire\":1773206960,\"effectiveTime\":172800,\"links\":[{\"rel\":\"self\",\"href\":\"http://sso.unipus.cn/ssoserviceTicket/validate\"}]}",
   "temperature": 0.3,
   "whisper_api": null
 }
