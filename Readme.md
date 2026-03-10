@@ -1,7 +1,7 @@
 # U校园AI版刷课脚本
 ### 大学英语的刷课可谓既浪费时间又没有太多意义，我曾经在网上查过很多关于U校园AI版的刷课脚本，但是都无法使用。于是我决定既然没有那就自己创造。
 ### 作者Bilibili主页[点击查看](https://space.bilibili.com/556022848)
-
+### [视频教程](https://pan.baidu.com/s/13MTMXX0US9DUdn9_ivDfaQ) 提取码: 69eq
 
 
 ## 主要功能
