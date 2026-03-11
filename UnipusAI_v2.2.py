@@ -4157,9 +4157,9 @@ class CourseLearner:
         """首次进入：扫描目录并进入第一个未完成章节"""
         print("🚀 首次进入模式：")
         try:
-
-            input("请手动点击进入要刷的课后按回车（只进入目录不进入学习页面）")
             winsound.MessageBeep()
+            input("请手动点击进入要刷的课后按回车（只进入目录不进入学习页面）")
+
             # 扫描所有章节
             if not self._scan_all_chapters():
                 return False
