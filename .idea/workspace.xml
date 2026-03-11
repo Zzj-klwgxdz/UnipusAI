@@ -4,42 +4,118 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="5d802919-ac3a-4b38-99d7-3366dc9a2676" name="更改" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Unipus_v2.0.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/config.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.deps.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.dll" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.exe" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.pdb" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/net10.0-windows/ConfigEditor.runtimeconfig.json" beforeDir="false" />
+    <list default="true" id="5d802919-ac3a-4b38-99d7-3366dc9a2676" name="更改" comment="edited config.json">
+      <change beforePath="$PROJECT_DIR$/.idea/.name" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/UnipusAI.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/UnipusAI.iml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Unipus_v2.1.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/logs/ucampus_2026-03-05_15-46-32.log" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;Zzj-klwgxdz&quot;
+  }
+}</component>
   <component name="GithubPullRequestsUISettings">{
   &quot;selectedUrlAndAccountId&quot;: {
-    &quot;url&quot;: &quot;https://github.com/Zzj-klwgxdz/UnipusAI.git&quot;,
+    &quot;url&quot;: &quot;git@github.com:Zzj-klwgxdz/UnipusAI.git&quot;,
     &quot;accountId&quot;: &quot;a2aac714-b31c-4919-b231-3a772ee7c643&quot;
   }
 }</component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
-    &quot;last_opened_file_path&quot;: &quot;D:/UnipusAI&quot;
-  }
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 7
 }</component>
+  <component name="ProjectId" id="3AiGdjFGm6wnQKHafrQvUO2YcCc" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Python.Unipus_v2.1.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "main",
+    "last_opened_file_path": "D:/UnipusAI"
+  }
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="D:\UnipusAI" />
     </key>
   </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-4762d8aabb82-6d6dccd035ac-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.30387.173" />
+      </set>
+    </attachedChunks>
+  </component>
   <component name="TaskManager">
+    <task id="LOCAL-00001" summary="updated to v2.1">
+      <option name="closed" value="true" />
+      <created>1773067290936</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1773067290936</updated>
+    </task>
+    <task id="LOCAL-00002" summary="edited readme.md">
+      <option name="closed" value="true" />
+      <created>1773067731210</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1773067731210</updated>
+    </task>
+    <task id="LOCAL-00003" summary="edited config.json">
+      <option name="closed" value="true" />
+      <created>1773067837004</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1773067837004</updated>
+    </task>
+    <task active="true" id="Default" summary="默认任务">
+      <changelist id="5d802919-ac3a-4b38-99d7-3366dc9a2676" name="更改" comment="edited config.json" />
+      <created>1773068068656</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1773068068656</updated>
+    </task>
+    <task id="LOCAL-00004" summary="edited config.json">
+      <option name="closed" value="true" />
+      <created>1773149108736</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1773149108736</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="updated to v2.1" />
+    <MESSAGE value="edited readme.md" />
+    <MESSAGE value="edited config.json" />
+    <option name="LAST_COMMIT_MESSAGE" value="edited config.json" />
   </component>
 </project>

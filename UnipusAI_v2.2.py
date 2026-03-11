@@ -1,6 +1,6 @@
 from AudioRecognizer import *
 from EnvironmentChecker import *
-import hashlib, json, logging, os, sys, random, re, threading, time, warnings
+import hashlib, json, logging, os, sys, random, re, threading, time, warnings,winsound
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -15,7 +15,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-
+import webbrowser as wb
 
 
 # ==================== 标记弃用方法 ====================
@@ -4155,8 +4155,8 @@ class CourseLearner:
 
     def _first_entry(self) -> bool:
         """首次进入：扫描目录并进入第一个未完成章节"""
+        global choice
         print("🚀 首次进入模式：扫描课程目录...")
-
         try:
             # 进入课程页面
             course_page = WebDriverWait(self.driver, 10).until(
@@ -4166,61 +4166,23 @@ class CourseLearner:
             time.sleep(1)
 
             # 选择课程 - 使用模糊匹配
-            all_courses = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CLASS_NAME, 'course-name'))
-            )
+            all_courses = self.driver.find_elements(By.CSS_SELECTOR,'.slick-list > .slick-track')
+            for index,course in enumerate(all_courses):
+                course_name = course.find_element(By.CSS_SELECTOR,'.course-name').text
+                print(f"{course_name}:\t{index}")
 
-            # 获取所有课程元素
-            course_elements = all_courses.find_elements(By.CSS_SELECTOR, "p[title]")
 
-            target = None
-            target_course_name = self.config.target_course.strip()
-
-            # 方法1：精确匹配（完全相等）
-            for elem in course_elements:
-                title = elem.get_attribute('title') or elem.text.strip()
-                if title == target_course_name:
-                    target = elem
-                    print(f"✅ 精确匹配到课程: {title}")
+            while True:
+                try:
+                    winsound.MessageBeep()
+                    choice = int(input("请选择课程(输入课程后方的数字按回车)"))
+                    if choice > len(all_courses)-1 or choice < 0:
+                        raise ValueError
                     break
-
-            # 方法2：模糊匹配（包含关系）
-            if not target:
-                for elem in course_elements:
-                    title = elem.get_attribute('title') or elem.text.strip()
-                    # 互相包含：配置包含页面标题，或页面标题包含配置
-                    if (target_course_name.lower() in title.lower() or
-                            title.lower() in target_course_name.lower()):
-                        target = elem
-                        print(f"✅ 模糊匹配到课程: {title}")
-                        break
-
-            # 方法3：关键词匹配（去除空格和特殊字符后比较）
-            if not target:
-                def normalize(text):
-                    # 去除空格、括号、特殊字符，转为小写
-                    return re.sub(r'[^\w\u4e00-\u9fff]', '', text.lower())
-
-                target_normalized = normalize(target_course_name)
-
-                for elem in course_elements:
-                    title = elem.get_attribute('title') or elem.text.strip()
-                    if normalize(title) == target_normalized:
-                        target = elem
-                        print(f"✅ 关键词匹配到课程: {title}")
-                        break
-
-            if not target:
-                # 打印所有可用课程供用户参考
-                print("❌ 未找到目标课程，可用课程列表:")
-                for i, elem in enumerate(course_elements[:10], 1):  # 最多显示10个
-                    title = elem.get_attribute('title') or elem.text.strip()
-                    print(f"   {i}. {title}")
-                if len(course_elements) > 10:
-                    print(f"   ... 还有 {len(course_elements) - 10} 个课程")
-                raise NoSuchElementException(f"未找到课程: {self.config.target_course}")
-
-            target.click()
+                except ValueError:
+                    print("请输入有效数字")
+                    continue
+            all_courses[choice].click()
             time.sleep(2)
 
             # 扫描所有章节
@@ -4457,23 +4419,14 @@ class CourseLearner:
             error_msg = str(e)
             print(f"  ⚠️ 点击Unit失败: {error_msg[:50]}")
             logger.error(f"详细错误: {error_msg}", exc_info=True)  # 详细堆栈保存到文件
-
         # 点击章节
         try:
-            chapter['element'].click()
-            time.sleep(3)
-            return True
-        except Exception as e:
-            error_msg = str(e)
-            print(f"❌ 点击章节失败: {error_msg[:50]}...，尝试js点击")
-            logger.error(f"详细错误: {error_msg}", exc_info=True)  # 详细堆栈保存到文件
-        try:
             self.driver.execute_script("arguments[0].click();", chapter['element'])
-            print(f"✅ js点击成功")
+            print(f"✅ 章节点击成功")
             return True
         except Exception as e:
             error_msg = str(e)
-            print(f"❌ js点击也失败: {error_msg[:50]}")
+            print(f"❌ 章节点击失败: {error_msg[:50]}")
             return False
 
     def _try_alternative_navigation(self) -> bool:
@@ -4714,6 +4667,7 @@ class UCampusBot:
             login_btn = self.driver.find_element(By.XPATH,
                                                  '//*[@id="rc-tabs-0-panel-1"]/form/div[4]/div/div/div/div/button')
             login_btn.click()
+            winsound.MessageBeep()
             input("如有验证码，请手动输入验证码后在此处回车；如没有则直接按回车")
             self.anti_anti_cheat()
             time.sleep(3)
@@ -4815,8 +4769,9 @@ if __name__ == '__main__':
         print("   - 如检查通过但无法启动，使用 --skip-check 跳过")
         print("   命令: U校园AI答题.exe --skip-check\n")
 
-    input('按任意键启动程序...')
-
+    temp = input('是否查看作者主页[Y/N]')
+    if temp.upper() == 'Y':
+        wb.open("https://space.bilibili.com/556022848")
     logger, LOG_FILE = setup_logging()
     print(f"📄 详细日志保存至: {LOG_FILE}")
 
@@ -4827,11 +4782,9 @@ if __name__ == '__main__':
         error_msg = str(e)
         print(f"\n❌ 程序运行失败: {error_msg[:100]}")
         logger.error(f"程序异常: {error_msg}", exc_info=True)
-
         print("\n💡 建议：")
         print("   1. 重新运行程序，选择环境修复选项")
         print("   2. 以管理员身份运行程序")
         print("   3. 关闭杀毒软件后重试")
         print("   4. 查看日志文件获取详细信息")
-
-        input("\n按回车键退出...")
+        input("\n按任意键退出...")
