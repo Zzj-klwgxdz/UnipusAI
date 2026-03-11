@@ -27,7 +27,7 @@
 1. 在PyCharm或其他IDE中克隆此仓库
 2. 运行``` pip install -r requirements.txt ```安装依赖
 3. 修改config.json
-4. 运行Unipus_v1.0.py
+4. 运行Unipus_vx.x.py
 ### 对于只想要体验程序功能的用户
 - 只需要下载右侧release里的dist.zip，解压后编辑config.json，运行exe即可
 - 仍然需要安装Microsoft Edge浏览器和Microsoft Edge WebDriver驱动程序[点击下载](https://developer.microsoft.com/zh-cn/microsoft-edge/tools/webdriver)
