@@ -4155,36 +4155,11 @@ class CourseLearner:
 
     def _first_entry(self) -> bool:
         """首次进入：扫描目录并进入第一个未完成章节"""
-        global choice
-        print("🚀 首次进入模式：扫描课程目录...")
+        print("🚀 首次进入模式：")
         try:
-            # 进入课程页面
-            course_page = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, '//*[@id="root"]/section/aside/div/div/div[2]/div[1]/div[1]'))
-            )
-            course_page.click()
-            time.sleep(1)
 
-            # 选择课程 - 使用模糊匹配
-            all_courses = self.driver.find_elements(By.CSS_SELECTOR,'.slick-list > .slick-track')
-            for index,course in enumerate(all_courses):
-                course_name = course.find_element(By.CSS_SELECTOR,'.course-name').text
-                print(f"{course_name}:\t{index}")
-
-
-            while True:
-                try:
-                    winsound.MessageBeep()
-                    choice = int(input("请选择课程(输入课程后方的数字按回车)"))
-                    if choice > len(all_courses)-1 or choice < 0:
-                        raise ValueError
-                    break
-                except ValueError:
-                    print("请输入有效数字")
-                    continue
-            all_courses[choice].click()
-            time.sleep(2)
-
+            input("请手动点击进入要刷的课后按回车（只进入目录不进入学习页面）")
+            winsound.MessageBeep()
             # 扫描所有章节
             if not self._scan_all_chapters():
                 return False
