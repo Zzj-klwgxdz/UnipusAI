@@ -4,7 +4,8 @@ import tempfile
 import os
 import hashlib
 from typing import Dict,Optional
-import time
+from pydub import AudioSegment
+
 
 
 class AudioTranscriber:
@@ -153,34 +154,39 @@ class AudioTranscriber:
     def transcribe_long_audio(self, audio_url: str, language: str = "en",
                               chunk_length: int = 30) -> str:
         """
-        识别长音频（超过 25MB 或需要更精细控制时使用）
-
-        Whisper API 限制 25MB，本地模型无此限制但长音频建议分段
+        识别长音频（优先使用本地模型直接处理，避免分段）
         """
         temp_files = []
-
         try:
             # 下载音频
-            response = requests.get(audio_url, timeout=30)
+            print(f"      ⬇️ 下载音频...")
+            response = requests.get(audio_url, timeout=60)  # 增加超时时间
+            response.raise_for_status()
+
+            # 保存音频
             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
                 f.write(response.content)
                 audio_path = f.name
                 temp_files.append(audio_path)
 
-            # 检查文件大小
             file_size = os.path.getsize(audio_path)
             print(f"      📊 音频大小: {file_size / 1024 / 1024:.1f} MB")
 
-            # 如果小于 20MB 且使用 API，直接识别
-            if file_size < 20 * 1024 * 1024 and not self.use_local:
+            # 关键修改：本地模型直接识别整个文件，不分段
+            if self.use_local or self.api_key is None:
+                print(f"      🎙️ 使用本地模型直接识别（适合长音频）...")
+                return self._transcribe_local(audio_path, language) or ""
+
+            # 如果需要用 API 且文件小于 25MB，直接 API 调用
+            if file_size < 25 * 1024 * 1024:
                 return self._transcribe_api(audio_path, language) or ""
 
-            # 大文件或本地模型：使用 pydub 分段
-            print(f"      ⏭️ 音频较大，分段识别...")
+            # API 但文件超大时才分段（需要 pydub+ffmpeg）
+            print(f"      ⏭️ API 文件过大，尝试分段...")
             return self._split_and_transcribe(audio_path, language, chunk_length)
 
         except Exception as e:
-            print(f"      ❌ 长音频处理失败: {str(e)[:50]}")
+            print(f"      ❌ 音频处理失败: {str(e)[:80]}")
             return ""
         finally:
             for f in temp_files:
@@ -192,55 +198,25 @@ class AudioTranscriber:
 
     def _split_and_transcribe(self, audio_path: str, language: str,
                               chunk_length: int) -> str:
-        """分段识别音频"""
+        """分段识别（带故障回退）"""
         try:
-            from pydub import AudioSegment
 
-            # 加载音频
-            audio = AudioSegment.from_mp3(audio_path)
-            total_length = len(audio) / 1000  # 秒
-
-            print(f"      🎵 音频时长: {total_length:.1f}秒，分段长度: {chunk_length}秒")
-
-            full_text = []
-            num_chunks = int(total_length // chunk_length) + 1
-
-            for i in range(num_chunks):
-                start = i * chunk_length * 1000  # pydub 使用毫秒
-                end = min((i + 1) * chunk_length * 1000, len(audio))
-
-                chunk = audio[start:end]
-
-                # 保存分段
-                chunk_path = audio_path.replace(".mp3", f"_chunk{i}.mp3")
-                chunk.export(chunk_path, format="mp3")
-
-                print(f"      🎙️ 识别第 {i + 1}/{num_chunks} 段...")
-
-                # 识别
-                if self.use_local or self.api_key is None:
-                    text = self._transcribe_local(chunk_path, language)
-                else:
-                    text = self._transcribe_api(chunk_path, language)
-
-                if text:
-                    full_text.append(text)
-
-                # 清理分段文件
-                try:
-                    os.unlink(chunk_path)
-                except:
-                    pass
-
-                # 避免 API 限流
-                if not self.use_local and i < num_chunks - 1:
-                    time.sleep(0.5)
-
-            return " ".join(full_text)
-
-        except ImportError:
-            print("      ⚠️ 未安装 pydub，无法分段。尝试直接识别...")
-            return self._transcribe_local(audio_path, language) or ""
+            # 测试 pydub 是否可用（ffmpeg 检查）
+            AudioSegment.converter  # 简单属性检查
         except Exception as e:
-            print(f"      ❌ 分段识别失败: {str(e)[:50]}")
-            return ""
+            print(f"      ⚠️ pydub/ffmpeg 不可用: {e}，回退到直接识别")
+            if self.local_model:
+                return self._transcribe_local(audio_path, language) or ""
+            return self._transcribe_api(audio_path, language) or ""
+
+        try:
+            audio = AudioSegment.from_mp3(audio_path)
+        except Exception as e:
+            print(f"      ❌ 分段识别出错: {str(e)[:80]}，回退到直接识别")
+            if self.local_model:
+                return self._transcribe_local(audio_path, language) or ""
+            # 最后尝试 API 直接上
+            try:
+                return self._transcribe_api(audio_path, language) or ""
+            except:
+                return ""

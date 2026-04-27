@@ -2,3 +2,5 @@ openai
 selenium
 requests
 openai-whisper
+pydub
+audioop-lts
