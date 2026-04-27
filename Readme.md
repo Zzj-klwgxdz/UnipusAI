@@ -30,7 +30,7 @@
 3. 修改config.json
 4. 运行Unipus_vx.x.py
 ### 对于只想要体验程序功能的用户
-- 只需要下载右侧release里的dist.zip，解压后编辑config.json，运行exe即可
+- 只需要下载右侧release里的dist.zip，无需python，解压后编辑config.json，运行exe即可
 - 仍然需要安装Microsoft Edge浏览器和Microsoft Edge WebDriver驱动程序[点击下载](https://developer.microsoft.com/zh-cn/microsoft-edge/tools/webdriver)
 ## 注意：启动后严禁手动操作，否则可能导致程序异常
 ## 刷课时可以手动点击右方侧边栏切换课程
