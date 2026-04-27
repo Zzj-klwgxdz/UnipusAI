@@ -9,7 +9,7 @@
 
 
 - **功能1:** 全自动程序，解放双手
-- **功能2:** 接入KIMI API，实现AI答题
+- **功能2:** 支持多种大模型的API，实现AI答题
 
 
 
@@ -32,14 +32,15 @@
 ### 对于只想要体验程序功能的用户
 - 只需要下载右侧release里的dist.zip，解压后编辑config.json，运行exe即可
 - 仍然需要安装Microsoft Edge浏览器和Microsoft Edge WebDriver驱动程序[点击下载](https://developer.microsoft.com/zh-cn/microsoft-edge/tools/webdriver)
-## 注意：启动后严禁一切操作，否则可能导致程序异常
+## 注意：启动后严禁手动操作，否则可能导致程序异常
+## 刷课时可以手动点击右方侧边栏切换课程
 ## 在config.json里编辑配置
 1. 把"Your username"替换为你的账号，把"Your password"替换为你的密码
-2. 把“Your api"替换为你在[KIMI开放平台](https://platform.moonshot.cn/docs/guide/start-using-kimi-api)申请的API KEY(无需修改base_url和model)<p></p>或者任意支持openai接口的大模型api并修改相应的base_url和model
-
-3. 两种学习策略,"learn_all"为学习所有课程，“learn_all_compulsory_course”为学习必修课
-4. full_token需要改为自己的token，详见《关于U校园ai版的防作弊机制》
-5. whisper_api用于语音识别的在线模式，一般情况下不用管，值为null时使用本地模型，初次启动程序时会自动下载本地模型
+2. 把“Your api"替换为任意大模型的api，并修改base_url和model,注意余额充足
+3. 使用config编辑工具时，默认是kimi，如果使用kimi大模型，则无需修改base_url和model 
+4. 两种学习策略,"learn_all"为学习所有课程，“learn_all_compulsory_course”为学习必修课 
+5. full_token需要改为自己的token，详见《关于U校园ai版的防作弊机制》 
+6. whisper_api用于语音识别的在线模式，一般情况下不用管，值为null时使用本地模型，初次启动程序时会自动下载本地模型
 ## 关于U校园ai版的防作弊机制
 - 我已破解
 - 手动在浏览器登陆账号，然后打开开发者窗口在控制台输入localStorage.getItem('__token')
@@ -68,6 +69,11 @@
 - 修复了其他浏览器修改配置导致此程序异常
 ## v2.2更新
 - 将选择课程改为手动选择，请在进入目录前关注控制台
+## v2.3更新
+- 重写了视频和音频内容的识别逻辑
+- 现在已支持根据视频和音频内容的选择题、填空题
+- 删除了提示pudub未安装的无效提示
+- 修复了多选题只能在ABCD中选的bug
 ## 📜 许可证
 
 本项目在[MIT License](LICENSE)下发布。
