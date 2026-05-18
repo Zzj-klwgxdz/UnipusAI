@@ -4567,7 +4567,8 @@ class UCampusBot:
     def anti_anti_cheat(self):
         """注入token绕过防作弊检测"""
         self.driver.execute_script('window.localStorage.setItem("__token", `{}`);'.format(self.config.token_full))
-        self.driver.refresh()
+        #v2.4版本修复白屏问题
+        self.driver.get("https://ucloud.unipus.cn/home")
 
 
 class PopupWatcher:
