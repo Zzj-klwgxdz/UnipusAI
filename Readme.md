@@ -2,6 +2,7 @@
 
 本项目是原 Python + Selenium 版（v2.4）的 **Rust 完全重写版**：
 不需要浏览器、不需要 WebDriver，纯命令行 + 原生 HTTP 实现，更轻量、更快、更稳定
+### 原项目bug较多，如想用浏览器自动化方案请看[这个](https://github.com/YSJohnson/UnipusAI-Helper/tree/main)
 ### 该项目在测试阶段，可能存在诸多问题，欢迎各位到issue留言
 > 原 Python 版本（`Unipus_v2.4.py`、`AudioRecognizer.py`、`EnvironmentChecker.py` 等）及 PyInstaller 打包产物均已从仓库移除，仅保留 Rust 实现。
 
