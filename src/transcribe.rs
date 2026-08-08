@@ -72,54 +72,110 @@ fn extract_wav(media: &PathBuf, wav: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// 调用本地 whisper CLI 转写 wav。
-/// language 为 "auto" / 空时省略 --language，让 whisper 自动检测语种。
-fn whisper_cli(wav: &PathBuf, model: &str, language: &str) -> Result<String> {
-    let whisper = which("whisper")
-        .or_else(|| {
-            // .venv/Scripts/whisper.exe
-            which_venv("whisper")
-        })
-        .ok_or_else(|| anyhow::anyhow!("未找到 whisper CLI"))?;
-    let mut cmd = std::process::Command::new(whisper);
-    cmd.arg(wav.to_str().unwrap_or(""))
-        .arg("--model")
-        .arg(model);
-    let lang = language.trim();
-    if !lang.is_empty() && !lang.eq_ignore_ascii_case("auto") {
-        cmd.arg("--language").arg(lang);
-    }
-    cmd.arg("--output_format")
-        .arg("txt")
-        .arg("--output_dir")
-        .arg(CACHE_DIR)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let out = cmd.output().context("运行 whisper 失败")?;
-    if !out.status.success() {
-        anyhow::bail!("whisper 转录失败 status={}", out.status);
-    }
-    // whisper 的输出文件名为 {wav 原名}.txt
-    let txt_path = {
-        let name = wav
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("out")
-            .trim_end_matches(".wav");
-        cache_root().join(format!("{}.txt", name))
+/// 用纯 Rust whisper（whisper-candle-core）转写 wav。
+/// language 为 "auto" / 空时传 None，让模型自动检测语种。
+fn whisper_infer(wav: &PathBuf, model: &str, language: &str) -> Result<String> {
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<Option<(String, whisper_core::WhisperModel)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+
+    let device = whisper_core::device("cpu").context("初始化 whisper 设备失败")?;
+    let lang_opt = {
+        let lang = language.trim();
+        if lang.is_empty() || lang.eq_ignore_ascii_case("auto") {
+            None
+        } else {
+            Some(lang.to_string())
+        }
     };
-    let text = std::fs::read_to_string(&txt_path).unwrap_or_default();
-    Ok(text.trim().to_string())
+
+    let mut guard = cache.lock().unwrap();
+    if guard.as_ref().map(|(m, _)| m != model).unwrap_or(true) {
+        log::info!("加载 whisper 模型: {model}");
+        let loaded = load_whisper_model(model, &device)
+            .with_context(|| format!("加载 whisper 模型 {model} 失败"))?;
+        *guard = Some((model.to_string(), loaded));
+    }
+    let (_, wp_model) = guard.as_mut().unwrap();
+
+    let mut options = whisper_core::TranscribeOptions::default();
+    options.decode_options.language = lang_opt;
+    options.verbose = Some(false);
+    let result = whisper_core::transcribe_file(wp_model, wav, &options)
+        .context("whisper 转录失败")?;
+    Ok(result.text.trim().to_string())
 }
 
-fn which_venv(bin: &str) -> Option<std::path::PathBuf> {
-    for base in [".venv", "venv", ".virtualenv"] {
-        let p = PathBuf::from(base).join("Scripts").join(format!("{}.exe", bin));
-        if p.is_file() {
-            return Some(p);
+/// 从 HuggingFace Hub 下载/复用 whisper 模型并加载。
+/// 走 `HF_ENDPOINT`（如国内镜像 hf-mirror.com），默认官方 huggingface.co。
+/// 模型文件缓存到 `~/.cache/whisper-candle/`（HF_HOME 可覆盖）。
+fn load_whisper_model(
+    model: &str,
+    device: &candle_core::Device,
+) -> Result<whisper_core::WhisperModel> {
+    use std::io::Read;
+
+    let which: whisper_core::WhichModel = model
+        .parse()
+        .with_context(|| format!("未知 whisper 模型: {model}"))?;
+    let repo = which.hf_repo();
+    let endpoint = std::env::var("HF_ENDPOINT")
+        .unwrap_or_else(|_| "https://huggingface.co".to_string());
+
+    let cache_root = std::env::var_os("HF_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("XDG_CACHE_HOME")
+                .map(|p| PathBuf::from(p).join("huggingface"))
+        })
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(|p| PathBuf::from(p).join(".cache").join("huggingface"))
+        })
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|p| PathBuf::from(p).join(".cache").join("huggingface"))
+        })
+        .unwrap_or_else(|| PathBuf::from(".whisper_cache"));
+    let model_dir = cache_root
+        .join("whisper-candle")
+        .join(repo.replace('/', "__"));
+    std::fs::create_dir_all(&model_dir).ok();
+
+    let fetch = |filename: &str| -> Result<Option<PathBuf>> {
+        let dest = model_dir.join(filename);
+        if dest.is_file() && dest.metadata().map(|m| m.len()).unwrap_or(0) > 0 {
+            return Ok(Some(dest));
         }
+        let url = format!("{}/{}/resolve/main/{}", endpoint, repo, filename);
+        log::info!("下载 whisper 模型文件: {url}");
+        let resp = ureq::get(&url)
+            .call()
+            .with_context(|| format!("下载 {} 失败", url))?;
+        let mut bytes: Vec<u8> = Vec::new();
+        resp.into_reader()
+            .read_to_end(&mut bytes)
+            .context("读取模型响应失败")?;
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        std::fs::write(&dest, &bytes)
+            .with_context(|| format!("保存模型文件失败: {}", dest.display()))?;
+        Ok(Some(dest))
+    };
+
+    let config = fetch("config.json")?
+        .ok_or_else(|| anyhow::anyhow!("下载 config.json 为空"))?;
+    let weights = fetch("model.safetensors")?
+        .ok_or_else(|| anyhow::anyhow!("下载 model.safetensors 为空"))?;
+    let generation_config = fetch("generation_config.json")?;
+
+    let mut loaded = whisper_core::WhisperModel::load(&config, &weights, device)?;
+    if let Some(gc) = generation_config {
+        loaded.set_alignment_heads_from_file(&gc)?;
     }
-    None
+    Ok(loaded)
 }
 
 /// 转录媒体内容为文本。优先读 .vtt 字幕，其次 whisper 转写。
@@ -165,7 +221,7 @@ pub async fn transcribe_media(session: &Session, url: &str) -> Result<String> {
     } else {
         extract_wav(&media, &wav)?;
     }
-    let text = whisper_cli(&wav, &cfg.whisper_model, &cfg.whisper_language)?;
+    let text = whisper_infer(&wav, &cfg.whisper_model, &cfg.whisper_language)?;
     std::fs::write(&cache_txt, &text).ok();
     Ok(text)
 }

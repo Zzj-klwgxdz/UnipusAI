@@ -293,7 +293,7 @@ async fn cmd_transcribe(session: &Session, url: &str) -> Result<()> {
     let text = UnipusAI::transcribe::transcribe_media(session, &media).await?;
     println!("[{}] {}ms 转写结果 {} 字:", url, start.elapsed().as_millis(), text.chars().count());
     if text.is_empty() {
-        anyhow::bail!("转写为空，请确认 whisper_enabled=true 且 ffmpeg/whisper 可用");
+        anyhow::bail!("转写为空，请确认 whisper_enabled=true 且 ffmpeg 可用、模型已下载");
     }
     println!("{}", UnipusAI::api::parser::truncate_text(&text, 300));
     Ok(())

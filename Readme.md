@@ -98,12 +98,16 @@ ParsedGroup
 ```
 ```
 vtt/srt 字幕 → 直接下载并解析纯文本
-音频/视频   → 下载 → ffmpeg 转 16k 单声道 wav → 本地 whisper CLI 转写
+音频/视频   → 下载 → ffmpeg 转 16k 单声道 wav → 本地 whisper 转写（纯 Rust，candle 推理）
 ```
 
 转变语言为 `auto`（或留空）时不传 `--language` 参数，whisper 自动检测语种；也可指定如 `en`/`zh` 强制语言。
 
 结果按 URL 的 SHA1 缓存到 `.media_cache/`，重复转写秒回。内容解密时抽取到的 WEBVTT 字幕会直接作为 `transcript` 使用，无需跑 whisper。
+
+> 转写使用内置的纯 Rust whisper（`whisper-candle-core`，candle 推理），**无需 Python/.venv**。
+> 模型（如 `base`）首次使用时自动从 HuggingFace 下载，缓存到 `~/.cache/whisper-candle/`。
+> 国内网络可设置环境变量 `HF_ENDPOINT=https://hf-mirror.com` 走镜像下载。
 
 ### 7. 提交
 `build_answer_payload` 构造 `submit` 接口所需的 `quesDatas`（每模块一个 instance，每子题一个 answer JSON），连同 `courseId`、`openId`、`publish_version` 等一并提交。`text`/`video` 类任务只调"标记已看"接口。
@@ -123,7 +127,7 @@ cargo build --release
 ### 依赖（可选）
 
 - **ffmpeg**：语音转写前置，需加入 PATH。
-- **whisper**：本地语音转写，需安装 `openai-whisper`（仓库内 `.venv` 已包含；`which("whisper")` 会先在 PATH 中查找）。
+- **whisper 模型**：转写用模型（默认 `base`），首次转写时自动从 HuggingFace 下载并缓存到 `~/.cache/whisper-candle/`；可通过环境变量 `HF_ENDPOINT=https://hf-mirror.com` 使用国内镜像。
 
 不配置这两者时程序仍可运行，只是带语音无字幕的题目会缺少材料。
 
@@ -220,4 +224,4 @@ cargo test
 
 ## 许可证
 
-本项目在 [MIT License](LICENSE) 下发布。
+本项目在 [GNU GPL v3.0](LICENSE) 下发布。

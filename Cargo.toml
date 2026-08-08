@@ -2,6 +2,7 @@
 name = "UnipusAI"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "cookies", "gzip", "brotli", "deflate", "http2"] }
@@ -17,3 +18,7 @@ rand = "0.8"
 sha1 = "0.10"
 env_logger = "0.11"
 log = "0.4"
+whisper-candle-core = "0.1"
+hf-hub = "0.4"
+candle-core = "0.9"
+ureq = "2"
