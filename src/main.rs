@@ -106,7 +106,7 @@ async fn cmd_test_types(session: &Session) -> Result<()> {
 }
 
 /// 打印全部题目文本与媒体转写结果（不答题、不提交），每个任务组一个文件。
-/// 输出目录: dump_text/，启动时先清空该目录。
+/// 输出目录: dump_text/，结果永久保留；已存在的任务组文件默认跳过，`--force` 清空重生成。
 async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
     use UnipusAI::api::content::{decrypt_content, fetch_content, parse_decrypted};
     use UnipusAI::api::course::{fetch_course_units, fetch_unit};
@@ -114,8 +114,20 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
     use std::fs;
 
     const OUT_DIR: &str = "dump_text";
-    // 启动时清空并重建输出目录
-    if std::path::Path::new(OUT_DIR).exists() {
+    // `--force` 清空并重建输出目录，否则保留已有文件（已生成的按任务组跳过）
+    let (force, unit_ids): (bool, Vec<String>) = {
+        let mut f = false;
+        let mut ids = Vec::new();
+        for id in unit_ids {
+            if id == "--force" {
+                f = true;
+            } else {
+                ids.push(id.clone());
+            }
+        }
+        (f, ids)
+    };
+    if force && std::path::Path::new(OUT_DIR).exists() {
         fs::remove_dir_all(OUT_DIR).ok();
     }
     fs::create_dir_all(OUT_DIR)?;
@@ -131,12 +143,17 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
     let mut n_question = 0usize;
     let mut n_media = 0usize;
     let mut n_media_chars = 0usize;
-    let mut files: Vec<String> = Vec::new();
+    let mut n_skipped = 0usize;
 
     for uid in &units {
         let rt = fetch_unit(session, uid).await?;
         for (gid, leaf) in &rt.leafs {
             if leaf.tab_type != "task" {
+                continue;
+            }
+            let path = format!("{}/{}.txt", OUT_DIR, gid);
+            if !force && std::path::Path::new(&path).is_file() {
+                n_skipped += 1;
                 continue;
             }
             let Ok(fc) = fetch_content(session, gid).await else { continue };
@@ -198,9 +215,7 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
                 }
             }
 
-            let path = format!("{}/{}.txt", OUT_DIR, gid);
             fs::write(&path, lines.join("\n"))?;
-            files.push(path.clone());
             println!(
                 "任务组 {} -> {} (模块{} 题{} 媒体{})",
                 gid,
@@ -212,19 +227,33 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
         }
     }
 
+    // 汇总反映 dump_text/ 实际累计保留的文件
+    let mut all: Vec<String> = std::fs::read_dir(OUT_DIR)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map(|x| x == "txt").unwrap_or(false))
+                .filter(|e| e.file_name() != "_summary.txt")
+                .map(|e| format!("{}/{}", OUT_DIR, e.file_name().to_string_lossy()))
+                .collect()
+        })
+        .unwrap_or_default();
+    all.sort();
+    all.dedup();
+    let total = all.len();
+
     let summary = format!(
-        "dump-text 完成: 单元 {} 个, 任务组 {} 个, 模块 {} 个, 题目 {} 道\n\
-         媒体转写 {} 条, 共 {} 字符\n\
-         文件 {} 个:\n{}",
+        "dump-text 完成: 单元 {} 个, 任务组 {} 个(本次新生成), 跳过 {} 个, 目录累计文件 {} 个\n\
+         本次新生成: 模块 {} 个, 题目 {} 道, 媒体转写 {} 条, 共 {} 字符\n\
+         文件清单:\n{}",
         units.len(),
         n_group,
+        n_skipped,
+        total,
         n_module,
         n_question,
         n_media,
         n_media_chars,
-        files.len(),
-        files
-            .iter()
+        all.iter()
             .map(|f| format!("  {}", f))
             .collect::<Vec<_>>()
             .join("\n")
@@ -347,6 +376,7 @@ fn print_help() {
   UnipusAI test-types         每种题型抽一题测试答题链路(不提交，用于全部章节已完成的场景)
   UnipusAI transcribe <url>   测试媒体转写链路(下载->ffmpeg->whisper)
   UnipusAI dump-text [unitId...]  打印全部题目文本与媒体转写，每任务组一个文件到 dump_text/ (不答题)
+                                   已存在的任务组文件跳过，--force 清空并重新生成
 配置见 config.json，unit_id 已无需填写
 "#
     );

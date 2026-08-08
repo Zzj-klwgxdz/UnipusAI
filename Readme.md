@@ -183,9 +183,10 @@ copy config.example.json config.json
 | `api_key` / `base_url` / `model` | 大模型厂商控制台申请（DeepSeek / Moonshot / Kimi 等），如 DeepSeek 平台生成 `sk-xxx`，`base_url=https://api.deepseek.com`，`model=deepseek-v4-flash` |
 | `learning_strategy` | 固定值二选一：`learn_all`（全部课程）或 `learn_all_compusory_course`（仅必修） |
 
-说明：
+**说明：**
 
 - `timeout`、`max_tokens`、`temperature`、`fallback_on_llm_failure`、`whisper_*` 均为可选，按需修改即可。
+- 字段中可能有双引号`""`影响（尤其是cookie），导致程序出错，粘贴前需要检查，如果有双引号需要在双引号前加`\`取消转义
 - `publish_version` 首次运行 `run` 时检测到变更会自动回写 config.json，可不手工改。
 - cookie、authorization 等登录凭证有有效期，失效后需按上述步骤重新复制。
 ![course_id](/imgs/course_id.png)
@@ -207,12 +208,13 @@ debug <groupId>        本地求解指定任务组（不提交，用于调试）
 test-types             每种题型抽一题测试答题链路（不提交）
 transcribe <url>       测试媒体转写链路（下载→ffmpeg→whisper）
 dump-text [unitId...]  打印全部题目文本与媒体转写，每任务组一个文件到 dump_text/（不答题）
+                       已存在的任务组文件跳过，--force 清空并重新生成
 ```
 
 ### 转写与文本导出
 
 - `transcribe <url>` 可对任意媒体 URL 单独验证转写链路，结果按 URL 缓存。
-- `dump-text` 遍历全课程（或指定单元），把所有模块的材料文本、内嵌字幕、媒体转写文字以及每题的题干与选项写入 `dump_text/<groupId>.txt`，并汇总到 `dump_text/_summary.txt`。启动时会先清空该目录。用于核对题目识别是否完整、媒体转写是否正确。
+- `dump-text` 遍历全课程（或指定单元），把所有模块的材料文本、内嵌字幕、媒体转写文字以及每题的题干与选项写入 `dump_text/<groupId>.txt`，并汇总到 `dump_text/_summary.txt`。结果永久保留：已存在的任务组文件直接跳过（不重复转写），`--force` 可清空并全量重新生成。用于核对题目识别是否完整、媒体转写是否正确。
 
 ## 测试
 
