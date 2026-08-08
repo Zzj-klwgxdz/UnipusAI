@@ -20,7 +20,7 @@
 | reqwest | HTTP 客户端（rustls、cookie、gzip/brotli） |
 | aes / ecb / hex | 题目内容 AES-128-ECB 解密 |
 | serde / serde_json | 配置与接口数据序列化 |
-| OpenAI Whisper (Python CLI) | 本地语音转写 |
+| Whisper (whisper-candle-core) | 本地语音转写 |
 | FFmpeg | 媒体转 wav 前处理 |
 
 ## 项目结构
