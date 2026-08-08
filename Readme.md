@@ -9,7 +9,7 @@
 ## 主要功能
 
 - **全自动刷课**：遍历课程全部单元/任务组，自动解析并作答提交，跳过已通过的章节。
-- **AI 答题**：接入任意 OpenAI 兼容接口（DeepSeek / Moonshot / Kimi 等），覆盖选择、填空、简答等常见题型。
+- **AI 答题**：接入任意 OpenAI 兼容接口（DeepSeek / Kimi 等），覆盖选择、填空、简答等常见题型。
 - **本地语音/视频转写**：对无内嵌字幕的音频/视频模块，用 ffmpeg + OpenAI Whisper 本地转写后作答，不依赖在线语音识别服务。
 - **纯命令行工具**：提供 `progress` / `run` / `group` / `debug` / `test-types` / `transcribe` / `dump-text` 等命令，方便调试与验证。
 
