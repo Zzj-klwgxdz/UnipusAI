@@ -1,0 +1,6 @@
+/target
+/logs
+/.media_cache
+/dump_text
+/__pycache__/
+/config.json

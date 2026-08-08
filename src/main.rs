@@ -1,0 +1,353 @@
+use anyhow::Result;
+use std::path::PathBuf;
+use UnipusAI::api::session::Session;
+use UnipusAI::config::Config;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    env_logger::builder()
+        .filter_level(log::LevelFilter::Info)
+        .format_timestamp_secs()
+        .init();
+
+    let config_path = PathBuf::from("config.json");
+    let cfg = Config::load(&config_path)?;
+    let session = Session::new(cfg.clone(), config_path.clone())?;
+
+    let args: Vec<String> = std::env::args().collect();
+    let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("help");
+
+    match cmd {
+        "progress" => cmd_progress(&session).await?,
+        "group" => cmd_group(&session, args.get(2).map(|s| s.as_str()).unwrap_or_default()).await?,
+        "debug" => cmd_debug(&session, args.get(2).map(|s| s.as_str()).unwrap_or_default()).await?,
+        "run" => cmd_run(session, &args[2..]).await?,
+        "test-types" => cmd_test_types(&session).await?,
+        "transcribe" => {
+            let url = args.get(2).map(|s| s.as_str()).unwrap_or_default();
+            cmd_transcribe(&session, url).await?
+        }
+        "dump-text" => cmd_dump_text(&session, &args[2..]).await?,
+        "help" | "-h" | "--help" => print_help(),
+        other => {
+            eprintln!("未知命令: {}", other);
+            print_help();
+        }
+    }
+    Ok(())
+}
+
+/// 每个题型抽一题测试答题链路（含媒体转写），不提交。
+async fn cmd_test_types(session: &Session) -> Result<()> {
+    use UnipusAI::api::content::{decrypt_content, fetch_content, parse_decrypted};
+    use UnipusAI::api::course::{fetch_course_units, fetch_unit};
+    use UnipusAI::api::parser::{parse_group, Module};
+    use std::collections::BTreeMap;
+
+    let units = fetch_course_units(session).await?;
+    // key: module_type + child reply_type；取每个题型的第一题
+    let mut samples: BTreeMap<String, (String, String, Module, usize)> = BTreeMap::new();
+
+    for uid in &units {
+        let rt = fetch_unit(session, uid).await?;
+        for (gid, leaf) in &rt.leafs {
+            if leaf.tab_type != "task" {
+                continue;
+            }
+            let Ok(fc) = fetch_content(session, gid).await else { continue };
+            let Ok(plain) = decrypt_content(&fc.content, &fc.k) else { continue };
+            let Ok(dec) = parse_decrypted(&plain) else { continue };
+            let Ok(group) = parse_group(&dec) else { continue };
+            for m in &group.modules {
+                if m.children.is_empty() {
+                    continue;
+                }
+                for (ci, c) in m.children.iter().enumerate() {
+                    let key = format!("{} / {}", m.module_type, c.reply_type);
+                    samples.entry(key).or_insert_with(|| {
+                        (uid.clone(), gid.clone(), m.clone(), ci)
+                    });
+                }
+            }
+        }
+    }
+
+    println!("共发现 {} 种题型，逐个测试：\n", samples.len());
+    let mut failed = 0usize;
+    for (key, (unit, gid, m, ci)) in &samples {
+        let _ = unit;
+        let qtext = m
+            .children
+            .get(*ci)
+            .map(|c| UnipusAI::api::parser::truncate_text(&c.question_text, 50))
+            .unwrap_or_default();
+        let media = if m.media_sources.is_empty() {
+            "无".to_string()
+        } else {
+            format!("{}个", m.media_sources.len())
+        };
+        print!("[{:<4}] {} 题干={} 媒体={} ...", format!("{}/{}", key, ci), gid, qtext, media);
+        match UnipusAI::solve::solve_module(session, m).await {
+            Ok(vals) => {
+                let ans = vals.get(*ci).cloned().unwrap_or_default();
+                println!("答={}", UnipusAI::api::parser::truncate_text(&ans, 40));
+            }
+            Err(e) => {
+                failed += 1;
+                println!("失败: {:#}", e);
+            }
+        }
+    }
+    println!("\n题型 {} 个，失败 {} 个", samples.len(), failed);
+    if failed > 0 {
+        anyhow::bail!("部分题型测试失败");
+    }
+    Ok(())
+}
+
+/// 打印全部题目文本与媒体转写结果（不答题、不提交），每个任务组一个文件。
+/// 输出目录: dump_text/，启动时先清空该目录。
+async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
+    use UnipusAI::api::content::{decrypt_content, fetch_content, parse_decrypted};
+    use UnipusAI::api::course::{fetch_course_units, fetch_unit};
+    use UnipusAI::api::parser::{parse_group, truncate_text};
+    use std::fs;
+
+    const OUT_DIR: &str = "dump_text";
+    // 启动时清空并重建输出目录
+    if std::path::Path::new(OUT_DIR).exists() {
+        fs::remove_dir_all(OUT_DIR).ok();
+    }
+    fs::create_dir_all(OUT_DIR)?;
+
+    let units = if unit_ids.is_empty() {
+        fetch_course_units(session).await?
+    } else {
+        unit_ids.to_vec()
+    };
+
+    let mut n_group = 0usize;
+    let mut n_module = 0usize;
+    let mut n_question = 0usize;
+    let mut n_media = 0usize;
+    let mut n_media_chars = 0usize;
+    let mut files: Vec<String> = Vec::new();
+
+    for uid in &units {
+        let rt = fetch_unit(session, uid).await?;
+        for (gid, leaf) in &rt.leafs {
+            if leaf.tab_type != "task" {
+                continue;
+            }
+            let Ok(fc) = fetch_content(session, gid).await else { continue };
+            let Ok(plain) = decrypt_content(&fc.content, &fc.k) else { continue };
+            let Ok(dec) = parse_decrypted(&plain) else { continue };
+            let Ok(group) = parse_group(&dec) else { continue };
+
+            n_group += 1;
+            let mut lines: Vec<String> = Vec::new();
+            lines.push(format!("==== 单元 {} / 任务组 {} ({}) ====", uid, gid, leaf.tab_type));
+
+            for m in &group.modules {
+                n_module += 1;
+                n_question += m.children.len();
+                lines.push(String::new());
+                lines.push(format!(
+                    "[模块] type={} reply_type={} instance_id={}",
+                    m.module_type, m.reply_type, m.instance_id
+                ));
+                if !m.direction.is_empty() {
+                    lines.push(format!("【答题说明】\n{}", m.direction));
+                }
+                if !m.material.is_empty() {
+                    lines.push(format!("【材料文本】({}字)\n{}", m.material.chars().count(), m.material));
+                }
+                if !m.transcript.is_empty() {
+                    lines.push(format!("【内嵌字幕】({}字)\n{}", m.transcript.chars().count(), m.transcript));
+                }
+                for url in &m.media_sources {
+                    n_media += 1;
+                    match UnipusAI::transcribe::transcribe_media(session, url).await {
+                        Ok(t) => {
+                            n_media_chars += t.chars().count();
+                            lines.push(format!("【媒体转写】(来源 {})\n{}", url, truncate_text(&t, 5000)));
+                        }
+                        Err(e) => {
+                            lines.push(format!("【媒体转写失败】(来源 {})\n{:#}", url, e));
+                        }
+                    }
+                }
+                for (ci, c) in m.children.iter().enumerate() {
+                    let mut buf = format!("  [{:>2}] {} ", ci + 1, c.reply_type);
+                    if !c.question_text.is_empty() {
+                        buf.push_str(&format!("| 题干: {}", truncate_text(&c.question_text, 300)));
+                    }
+                    if !c.options.is_empty() {
+                        let opts: Vec<String> = c
+                            .options
+                            .iter()
+                            .map(|o| {
+                                let label = if o.name.is_empty() { o.value.clone() } else { o.name.clone() };
+                                let txt = if o.text.is_empty() { o.value.clone() } else { o.text.clone() };
+                                format!("{}: {}", label, truncate_text(&txt, 100))
+                            })
+                            .collect();
+                        buf.push_str(&format!(" | 选项: {}", opts.join(" ; ")));
+                    }
+                    lines.push(buf);
+                }
+            }
+
+            let path = format!("{}/{}.txt", OUT_DIR, gid);
+            fs::write(&path, lines.join("\n"))?;
+            files.push(path.clone());
+            println!(
+                "任务组 {} -> {} (模块{} 题{} 媒体{})",
+                gid,
+                path,
+                group.modules.len(),
+                UnipusAI::api::parser::question_count(&group),
+                m_media_count(&group)
+            );
+        }
+    }
+
+    let summary = format!(
+        "dump-text 完成: 单元 {} 个, 任务组 {} 个, 模块 {} 个, 题目 {} 道\n\
+         媒体转写 {} 条, 共 {} 字符\n\
+         文件 {} 个:\n{}",
+        units.len(),
+        n_group,
+        n_module,
+        n_question,
+        n_media,
+        n_media_chars,
+        files.len(),
+        files
+            .iter()
+            .map(|f| format!("  {}", f))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    fs::write(format!("{}/_summary.txt", OUT_DIR), &summary)?;
+    println!("\n{}\n", summary);
+    Ok(())
+}
+
+fn m_media_count(group: &UnipusAI::api::parser::ParsedGroup) -> usize {
+    group.modules.iter().map(|m| m.media_sources.len()).sum()
+}
+
+async fn cmd_debug(session: &Session, group_id: &str) -> Result<()> {
+    use UnipusAI::api::content::{decrypt_content, fetch_content, parse_decrypted};
+    use UnipusAI::api::parser::parse_group;
+    if group_id.is_empty() {
+        anyhow::bail!("用法: UnipusAI debug <groupId>");
+    }
+    let rt = fetch_content(session, group_id).await?;
+    let plain = decrypt_content(&rt.content, &rt.k)?;
+    let dec = parse_decrypted(&plain)?;
+    let group = parse_group(&dec)?;
+    for m in &group.modules {
+        println!(
+            "[module {}] reply_type={} children={} material_len={}",
+            m.instance_id,
+            m.reply_type,
+            m.children.len(),
+            m.material.chars().count()
+        );
+        let values = UnipusAI::solve::solve_module(session, m).await?;
+        for (ci, c) in m.children.iter().enumerate() {
+            let v = values.get(ci).cloned().unwrap_or_default();
+            println!(
+                "   [{:>2}] {} | q={} | ans={} | opts={}",
+                ci + 1,
+                c.reply_type,
+                UnipusAI::api::parser::truncate_text(&c.question_text, 60),
+                UnipusAI::api::parser::truncate_text(&v, 60),
+                c.option_count
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_group(session: &Session, group_id: &str) -> Result<()> {
+    if group_id.is_empty() {
+        anyhow::bail!("用法: UnipusAI group <groupId>");
+    }
+    let task = UnipusAI::core::runner::mock_task(session, group_id).await?;
+    match UnipusAI::core::runner::process_group(session, &task).await {
+        Ok(resp) => println!("[OK] {} -> {}", task.tab_type, resp),
+        Err(e) => println!("[FAIL] {} -> {:#}", task.tab_type, e),
+    }
+    Ok(())
+}
+
+async fn cmd_transcribe(session: &Session, url: &str) -> Result<()> {
+    if url.is_empty() {
+        anyhow::bail!("用法: UnipusAI transcribe <mediaUrl>  (测试媒体转写链路)");
+    }
+    let media = UnipusAI::api::parser::clean_url(url);
+    let start = std::time::Instant::now();
+    let text = UnipusAI::transcribe::transcribe_media(session, &media).await?;
+    println!("[{}] {}ms 转写结果 {} 字:", url, start.elapsed().as_millis(), text.chars().count());
+    if text.is_empty() {
+        anyhow::bail!("转写为空，请确认 whisper_enabled=true 且 ffmpeg/whisper 可用");
+    }
+    println!("{}", UnipusAI::api::parser::truncate_text(&text, 300));
+    Ok(())
+}
+
+async fn cmd_progress(session: &Session) -> Result<()> {
+    use UnipusAI::core::planner::plan_course;
+    let plan = plan_course(session).await?;
+    println!("学习策略: {}", session.cfg().learning_strategy);
+    for unit in &plan.units {
+        println!("单元 {} ：任务 {} 个", unit.unit_id, unit.tasks.len());
+        for t in &unit.tasks {
+            println!(
+                "{:6} {:15} required={:<5} pass={} {}",
+                t.tab_type,
+                t.group_id,
+                t.required,
+                t.passed,
+                if t.passed { "✔" } else { "" }
+            );
+        }
+    }
+    println!(
+        "总计 {} 个任务，待完成 {} 个",
+        plan.total, plan.todo
+    );
+    Ok(())
+}
+
+async fn cmd_run(mut session: Session, unit_ids: &[String]) -> Result<()> {
+    let summary = if unit_ids.is_empty() {
+        UnipusAI::core::runner::run_course(&mut session).await?
+    } else {
+        UnipusAI::core::runner::run_course_units(&mut session, unit_ids).await?
+    };
+    println!(
+        "完成: done={} skipped={} failed={}",
+        summary.done, summary.skipped, summary.failed
+    );
+    Ok(())
+}
+
+fn print_help() {
+    println!(
+        r#"UnipusAI
+用法:
+  UnipusAI progress           打印课程全部单元/任务树(按 learning_strategy 过滤)
+  UnipusAI run [unitId...]    默认自动完成全课程(按 learning_strategy)，也可指定单元
+  UnipusAI group <groupId>    直接提交指定任务组(LLM 答题)
+  UnipusAI debug <groupId>    本地求解指定任务组(不提交，用于调试)
+  UnipusAI test-types         每种题型抽一题测试答题链路(不提交，用于全部章节已完成的场景)
+  UnipusAI transcribe <url>   测试媒体转写链路(下载->ffmpeg->whisper)
+  UnipusAI dump-text [unitId...]  打印全部题目文本与媒体转写，每任务组一个文件到 dump_text/ (不答题)
+配置见 config.json，unit_id 已无需填写
+"#
+    );
+}

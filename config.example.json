@@ -1,0 +1,20 @@
+{
+  "timeout": 10,
+  "cookie": "",
+  "authorization": "",
+  "x_annotator_auth_token": "",
+  "u_school": "",
+  "course_id": "",
+  "open_id": "",
+  "publish_version": "",
+  "api_key": "",
+  "base_url": "https://api.deepseek.com",
+  "model": "deepseek-v4-flash",
+  "learning_strategy": "learn_all_compusory_course",
+  "max_tokens": 2000,
+  "temperature": 0.3,
+  "fallback_on_llm_failure": true,
+  "whisper_enabled": true,
+  "whisper_model": "base",
+  "whisper_language": "auto"
+}
