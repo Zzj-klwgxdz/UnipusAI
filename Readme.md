@@ -9,8 +9,15 @@
 
 - **全自动刷课**：遍历课程全部单元/任务组，自动解析并作答提交，跳过已通过的章节。
 - **AI 答题**：接入任意 OpenAI 兼容接口（DeepSeek / Moonshot / Kimi 等），覆盖选择、填空、简答等常见题型。
-- **本地语音/视频转写**：对无内嵌字幕的音频/视频模块，用 ffmpeg + OpenAI Whisper 本地转写后作答，不依赖在线语音识别服务。
+- **本地语音/视频转写**：对无内嵌字幕的音频/视频模块，用 ffmpeg + Whisper 本地转写后作答，不依赖在线语音识别服务。
 - **纯命令行工具**：提供 `progress` / `run` / `group` / `debug` / `test-types` / `transcribe` / `dump-text` 等命令，方便调试与验证。
+- **爬取课程的目录，题目文本和媒体转写**：`dump-text`工具可以爬取课程题目和媒体转写
+
+## 示例图片
+![dumping](./imgs/dumping.png)
+*dump-text*
+![running](./imgs/running.png)
+*running*
 
 ## 技术栈
 
@@ -121,9 +128,7 @@ vtt/srt 字幕 → 直接下载并解析纯文本
 ```bash
 cargo build --release
 ```
-
-产物在 `target/release/UnipusAI.exe`。
-
+**注意使用release模式编译，使用debug模式会导致转写速度大幅下降**
 ### 依赖（可选）
 
 - **ffmpeg**：语音转写前置，需加入 PATH。
@@ -196,8 +201,17 @@ copy config.example.json config.json
 ![open_id](/imgs/how%20to%20get%20openid.png)
 
 ### 命令
+在源代码根目录
 ```powershell
-cargo run <params>
+cargo run --release <params>
+```
+在Unipus.exe目录，powershell
+```powershell
+.\UnipusAI.exe <params>
+```
+在Unipus.exe目录，cmd
+```bash
+UnipusAI <params>
 ```
 ### params
 ```
