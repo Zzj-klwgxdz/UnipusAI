@@ -253,6 +253,56 @@ pub fn truncate_text(s: &str, n: usize) -> String {
     }
 }
 
+/// 从解密后的组内容提取可读标签（用于显示单元/任务名）。
+/// 优先取模块 contents[] 中媒体项的 `name`（如 "U1 Pre-reading activities.mp3"，去扩展名），
+/// 无则回退到模块 direction 文本首行（截断 40 字），再无则返回空字符串。
+pub fn extract_group_label(decrypted: &Value) -> String {
+    let modules: Vec<&Value> = if let Some(arr) = decrypted.as_array() {
+        arr.iter().collect()
+    } else {
+        vec![decrypted]
+    };
+    let mut direction = String::new();
+    for module in modules {
+        let content = module
+            .get("content")
+            .and_then(|c| c.as_str())
+            .and_then(|s| serde_json::from_str::<Value>(s).ok())
+            .or_else(|| module.get("content").and_then(|c| c.as_object()).cloned().map(Value::Object));
+        let Some(content) = content else { continue };
+        if let Some(arr) = content.get("contents").and_then(|c| c.as_array()) {
+            for item in arr {
+                if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
+                    let name = name.trim();
+                    if !name.is_empty() && !looks_like_uuid(name) {
+                        return strip_media_ext(name).to_string();
+                    }
+                }
+            }
+        }
+        if direction.is_empty() {
+            direction = direction_text(&content);
+        }
+    }
+    if !direction.is_empty() {
+        return truncate_text(&direction, 40);
+    }
+    String::new()
+}
+
+fn looks_like_uuid(s: &str) -> bool {
+    s.contains('-') && s.chars().all(|c| c.is_alphanumeric() || c == '-')
+}
+
+fn strip_media_ext(s: &str) -> &str {
+    for ext in [".mp3", ".mp4", ".m4a", ".wav", ".aac", ".ogg", ".flac"] {
+        if let Some(rest) = s.strip_suffix(ext) {
+            return rest.trim_end();
+        }
+    }
+    s
+}
+
 pub fn build_context() -> String {
     "{\"state\":\"submitted\"}".to_string()
 }
@@ -290,5 +340,26 @@ mod tests {
         assert_eq!(out.lines().count(), 50);
         let short = strip_html_short(&input);
         assert_eq!(short.lines().count(), 30);
+    }
+
+    #[test]
+    fn group_label_prefers_media_name() {
+        let json = r#"[{"id":1,"content":"{\"type\":\"x\",\"contents\":[{\"id\":\"uuid-1\",\"text\":\"q\"},{\"path\":\"http://c/a.mp3\",\"name\":\"U1 Pre-reading activities.mp3\"}]}"}]"#;
+        let v: Value = serde_json::from_str(json).unwrap();
+        assert_eq!(extract_group_label(&v), "U1 Pre-reading activities");
+    }
+
+    #[test]
+    fn group_label_falls_back_to_direction() {
+        let json = r#"[{"id":1,"content":"{\"type\":\"x\",\"direction\":{\"text\":\"Listen and fill in the blanks.\"},\"contents\":[{\"id\":\"uuid-1\",\"text\":\"q\"}]}"}]"#;
+        let v: Value = serde_json::from_str(json).unwrap();
+        assert_eq!(extract_group_label(&v), "Listen and fill in the blanks.");
+    }
+
+    #[test]
+    fn group_label_empty_when_no_hint() {
+        let json = r#"[{"id":1,"content":"{\"type\":\"x\",\"contents\":[{\"id\":\"uuid-1\",\"text\":\"q\"}]}"}]"#;
+        let v: Value = serde_json::from_str(json).unwrap();
+        assert_eq!(extract_group_label(&v), "");
     }
 }

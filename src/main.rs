@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("help");
 
     match cmd {
-        "progress" => cmd_progress(&session).await?,
+        "progress" => cmd_progress(&session, &args[2..]).await?,
         "group" => cmd_group(&session, args.get(2).map(|s| s.as_str()).unwrap_or_default()).await?,
         "debug" => cmd_debug(&session, args.get(2).map(|s| s.as_str()).unwrap_or_default()).await?,
         "run" => cmd_run(session, &args[2..]).await?,
@@ -114,23 +114,18 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
     use std::fs;
 
     const OUT_DIR: &str = "dump_text";
-    // `--force` 清空并重建输出目录，否则保留已有文件（已生成的按任务组跳过）
-    let (force, unit_ids): (bool, Vec<String>) = {
-        let mut f = false;
-        let mut ids = Vec::new();
-        for id in unit_ids {
-            if id == "--force" {
-                f = true;
-            } else {
-                ids.push(id.clone());
-            }
-        }
-        (f, ids)
-    };
+    // `--force` 清空并重建输出目录，否则保留已有文件（已生成的按任务组跳过）；
+    // `--names` 额外打印课程名与单元名。
+    let (force, rest) = split_flag(unit_ids, "--force");
+    let (with_names, unit_ids) = split_flag(&rest, "--names");
     if force && std::path::Path::new(OUT_DIR).exists() {
         fs::remove_dir_all(OUT_DIR).ok();
     }
     fs::create_dir_all(OUT_DIR)?;
+
+    if with_names {
+        println!("课程: {}", UnipusAI::api::course::course_display_name(session.course_id()));
+    }
 
     let units = if unit_ids.is_empty() {
         fetch_course_units(session).await?
@@ -145,8 +140,10 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
     let mut n_media_chars = 0usize;
     let mut n_skipped = 0usize;
 
-    for uid in &units {
+    for (ui, uid) in units.iter().enumerate() {
         let rt = fetch_unit(session, uid).await?;
+        let mut unit_label: String = String::new();
+        let mut unit_header_printed = false;
         for (gid, leaf) in &rt.leafs {
             if leaf.tab_type != "task" {
                 continue;
@@ -160,6 +157,19 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
             let Ok(plain) = decrypt_content(&fc.content, &fc.k) else { continue };
             let Ok(dec) = parse_decrypted(&plain) else { continue };
             let Ok(group) = parse_group(&dec) else { continue };
+
+            if with_names && !unit_header_printed {
+                if unit_label.is_empty() {
+                    unit_label = UnipusAI::api::parser::extract_group_label(&dec);
+                }
+                let label = if unit_label.is_empty() {
+                    format!("Unit {}", ui + 1)
+                } else {
+                    unit_label.clone()
+                };
+                println!("单元 {} ({})", uid, label);
+                unit_header_printed = true;
+            }
 
             n_group += 1;
             let mut lines: Vec<String> = Vec::new();
@@ -289,9 +299,10 @@ async fn cmd_debug(session: &Session, group_id: &str) -> Result<()> {
         for (ci, c) in m.children.iter().enumerate() {
             let v = values.get(ci).cloned().unwrap_or_default();
             println!(
-                "   [{:>2}] {} | q={} | ans={} | opts={}",
+                "   [{:>2}] {} | qt={} | q={} | ans={} | opts={}",
                 ci + 1,
                 c.reply_type,
+                c.question_type,
                 UnipusAI::api::parser::truncate_text(&c.question_text, 60),
                 UnipusAI::api::parser::truncate_text(&v, 60),
                 c.option_count
@@ -328,12 +339,38 @@ async fn cmd_transcribe(session: &Session, url: &str) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_progress(session: &Session) -> Result<()> {
+/// 从参数中滤出开关标志，返回 (是否出现, 其余参数)。
+fn split_flag(args: &[String], flag: &str) -> (bool, Vec<String>) {
+    let mut present = false;
+    let mut rest = Vec::new();
+    for a in args {
+        if a == flag {
+            present = true;
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    (present, rest)
+}
+
+async fn cmd_progress(session: &Session, args: &[String]) -> Result<()> {
+    use UnipusAI::api::course::course_display_name;
     use UnipusAI::core::planner::plan_course;
+    let with_names = args.iter().any(|a| a == "--names");
     let plan = plan_course(session).await?;
+    if with_names {
+        println!("课程: {}", course_display_name(session.course_id()));
+    }
     println!("学习策略: {}", session.cfg().learning_strategy);
-    for unit in &plan.units {
-        println!("单元 {} ：任务 {} 个", unit.unit_id, unit.tasks.len());
+    for (i, unit) in plan.units.iter().enumerate() {
+        if with_names {
+            let label = UnipusAI::api::course::unit_label(session, &unit.unit_id)
+                .await?
+                .unwrap_or_else(|| format!("Unit {}", i + 1));
+            println!("单元 {} ({}) ：任务 {} 个", unit.unit_id, label, unit.tasks.len());
+        } else {
+            println!("单元 {} ：任务 {} 个", unit.unit_id, unit.tasks.len());
+        }
         for t in &unit.tasks {
             println!(
                 "{:6} {:15} required={:<5} pass={} {}",
@@ -353,10 +390,11 @@ async fn cmd_progress(session: &Session) -> Result<()> {
 }
 
 async fn cmd_run(mut session: Session, unit_ids: &[String]) -> Result<()> {
+    let (with_names, unit_ids) = split_flag(unit_ids, "--names");
     let summary = if unit_ids.is_empty() {
-        UnipusAI::core::runner::run_course(&mut session).await?
+        UnipusAI::core::runner::run_course(&mut session, with_names).await?
     } else {
-        UnipusAI::core::runner::run_course_units(&mut session, unit_ids).await?
+        UnipusAI::core::runner::run_course_units(&mut session, &unit_ids, with_names).await?
     };
     println!(
         "完成: done={} skipped={} failed={}",
@@ -369,14 +407,15 @@ fn print_help() {
     println!(
         r#"UnipusAI
 用法:
-  UnipusAI progress           打印课程全部单元/任务树(按 learning_strategy 过滤)
-  UnipusAI run [unitId...]    默认自动完成全课程(按 learning_strategy)，也可指定单元
+  UnipusAI progress [--names]    打印课程全部单元/任务树(按 learning_strategy 过滤)
+  UnipusAI run [--names] [unitId...]  默认自动完成全课程(按 learning_strategy)，也可指定单元
   UnipusAI group <groupId>    直接提交指定任务组(LLM 答题)
   UnipusAI debug <groupId>    本地求解指定任务组(不提交，用于调试)
   UnipusAI test-types         每种题型抽一题测试答题链路(不提交，用于全部章节已完成的场景)
   UnipusAI transcribe <url>   测试媒体转写链路(下载->ffmpeg->whisper)
-  UnipusAI dump-text [unitId...]  打印全部题目文本与媒体转写，每任务组一个文件到 dump_text/ (不答题)
-                                   已存在的任务组文件跳过，--force 清空并重新生成
+  UnipusAI dump-text [--names] [--force] [unitId...]  打印全部题目文本与媒体转写，每任务组一个文件到 dump_text/ (不答题)
+                                    已存在的任务组文件跳过，--force 清空并重新生成
+  --names 显示课程名与单元名（如 新视野大学英语(第四版)读写教程 / U1 Pre-reading activities）
 配置见 config.json，unit_id 已无需填写
 "#
     );

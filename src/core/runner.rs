@@ -33,32 +33,51 @@ pub async fn process_group(session: &Session, task: &GroupTask) -> Result<serde_
     }
 }
 
-pub async fn run_course(session: &mut Session) -> Result<RunSummary> {
+pub async fn run_course(session: &mut Session, with_names: bool) -> Result<RunSummary> {
     let course = fetch_course_progress(session).await?;
     let version = course.publish_version.clone();
     if !version.is_empty() {
         session.set_publish_version(&version)?;
     }
     let units = fetch_course_units(session).await?;
-    run_course_units(session, &units).await
+    run_course_units(session, &units, with_names).await
 }
 
-pub async fn run_course_units(session: &mut Session, unit_ids: &[String]) -> Result<RunSummary> {
+pub async fn run_course_units(
+    session: &mut Session,
+    unit_ids: &[String],
+    with_names: bool,
+) -> Result<RunSummary> {
     let compulsory_only = session.cfg().compulsory_only();
     let mut summary = RunSummary::default();
-    for unit_id in unit_ids {
+    if with_names {
+        info!(
+            "课程: {}",
+            crate::api::course::course_display_name(session.course_id())
+        );
+    }
+    for (ui, unit_id) in unit_ids.iter().enumerate() {
         let rt = fetch_unit(session, unit_id).await?;
         let tasks = select_tasks(&build_tasks(unit_id, &rt), compulsory_only);
-        info!(
-            "单元 {} ：任务 {} 个{}",
-            unit_id,
-            tasks.len(),
-            if compulsory_only {
-                " (仅必修)"
-            } else {
-                ""
-            }
-        );
+        if with_names {
+            let label = crate::api::course::unit_label(session, unit_id)
+                .await?
+                .unwrap_or_else(|| format!("Unit {}", ui + 1));
+            info!(
+                "单元 {} ({}) ：任务 {} 个{}",
+                unit_id,
+                label,
+                tasks.len(),
+                if compulsory_only { " (仅必修)" } else { "" }
+            );
+        } else {
+            info!(
+                "单元 {} ：任务 {} 个{}",
+                unit_id,
+                tasks.len(),
+                if compulsory_only { " (仅必修)" } else { "" }
+            );
+        }
         for task in &tasks {
             if task.passed {
                 summary.skipped += 1;

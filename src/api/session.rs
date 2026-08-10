@@ -77,11 +77,7 @@ impl Session {
         Ok(bytes.to_vec())
     }
 
-    pub async fn post_json<I: serde::Serialize, T: DeserializeOwned>(
-        &self,
-        url: &str,
-        payload: &I,
-    ) -> Result<T> {
+    pub async fn post_json<I: serde::Serialize, T: DeserializeOwned>(&self,url: &str,payload: &I,) -> Result<T> {
         let resp = self
             .client
             .post(url)
@@ -100,11 +96,7 @@ impl Session {
         serde_json::from_value(v).context("反序列化响应失败")
     }
 
-    pub async fn post_raw(
-        &self,
-        url: &str,
-        body: &str,
-    ) -> Result<(reqwest::StatusCode, String)> {
+    pub async fn post_raw(&self,url: &str,body: &str,) -> Result<(reqwest::StatusCode, String)> {
         let resp = self
             .client
             .post(url)

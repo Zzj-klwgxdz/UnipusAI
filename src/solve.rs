@@ -18,6 +18,7 @@ pub async fn solve_module(session: &Session, m: &Module) -> Result<Vec<String>> 
             Ok(out)
         }
         "fillblank" | "text-area" => solve_batch(session, m).await,
+        "bankedcloze" => solve_banked_cloze(session, m).await,
         other => {
             let mut out = Vec::with_capacity(m.children.len());
             for c in &m.children {
@@ -193,6 +194,84 @@ async fn solve_batch(session: &Session, m: &Module) -> Result<Vec<String>> {
     }
 }
 
+/// 选词填空：材料中带编号空格 ____n____，每空对应一个 child，词库来自选项。
+/// 一次 LLM 调用按编号填空，答案值提交单词本身（与平台抓包一致）。
+async fn solve_banked_cloze(session: &Session, m: &Module) -> Result<Vec<String>> {
+    let count = m.children.len();
+    let words = word_bank(m);
+    if !session.cfg().use_llm() || words.is_empty() {
+        return Ok(shuffled_words(&words, count));
+    }
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(ctx) = material_context(m) {
+        lines.push(ctx);
+        lines.push(String::new());
+    } else if let Some(ctx) = media_context(session, m).await {
+        lines.push(ctx);
+        lines.push(String::new());
+    }
+    lines.push("【选词填空】短文中共有 {} 个编号空格（____1____、____2____…），词库如下：".replace("{}", &count.to_string()));
+    lines.push(words.join("、"));
+    lines.push(String::new());
+    lines.push("请为每个编号空格选择最合适的单词，每个词限用一次。".to_string());
+    lines.push("请按题号回答，格式：1.单词 2.单词 3.单词 ...（只输出单词本身）".to_string());
+    let prompt = lines.join("\n");
+    match llm::ask(session, SYSTEM_PROMPT, &prompt).await {
+        Ok(ans) => Ok(canonicalize_banked(&parse_banked(&ans, count), &words, count)),
+        Err(e) => {
+            if session.cfg().fallback_on_llm_failure {
+                log::warn!("LLM 失败，选词填空随机兜底: {:#}", e);
+                Ok(shuffled_words(&words, count))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// 词库：按 children 顺序去重收集选项单词（value 优先，回退 name/text）。
+fn word_bank(m: &Module) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for c in &m.children {
+        for o in &c.options {
+            let w = if o.value.is_empty() { o.name.clone() } else { o.value.clone() };
+            let w = if w.is_empty() { o.text.clone() } else { w };
+            if !w.is_empty() && !out.iter().any(|x| x.eq_ignore_ascii_case(&w)) {
+                out.push(w);
+            }
+        }
+    }
+    out
+}
+
+/// 兜底：把词库随机打散后按空序分配（不重复）。
+fn shuffled_words(words: &[String], count: usize) -> Vec<String> {
+    use rand::seq::SliceRandom;
+    let mut pool = words.to_vec();
+    pool.shuffle(&mut rand::thread_rng());
+    (0..count).map(|i| pool.get(i).cloned().unwrap_or_default()).collect()
+}
+
+/// 规整解析出的答案：去尾部标点、忽略大小写归一到词库原词，缺位留空。
+fn canonicalize_banked(parts: &[String], words: &[String], count: usize) -> Vec<String> {
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let raw = parts.get(i).map(|s| s.as_str()).unwrap_or("");
+        let clean = raw
+            .trim()
+            .trim_end_matches(['.', ',', '，', '。', '、', ';', '；'])
+            .trim();
+        let lower = clean.to_lowercase();
+        let word = words
+            .iter()
+            .find(|w| w.to_lowercase() == lower)
+            .cloned()
+            .unwrap_or_else(|| clean.to_string());
+        out.push(word);
+    }
+    out
+}
+
 fn valid_labels(options: &[OptionItem]) -> Vec<String> {
     options
         .iter()
@@ -342,5 +421,62 @@ mod tests {
     fn parse_banked_order() {
         assert_eq!(split_numbered("1. apple 2. banana"), vec!["apple", "banana"]);
         assert_eq!(parse_banked("1. one 2. two", 2), vec!["one", "two"]);
+    }
+
+    #[test]
+    fn word_bank_dedupes_options() {
+        let opts = |w: &str| OptionItem {
+            name: w.into(),
+            value: w.into(),
+            text: String::new(),
+        };
+        let m = Module {
+            instance_id: "m".into(),
+            module_type: "material-banked-cloze".into(),
+            direction: String::new(),
+            material: String::new(),
+            media_sources: Vec::new(),
+            transcript: String::new(),
+            reply_type: "bankedcloze".into(),
+            children: vec![
+                ChildQ {
+                    question_type: "material-banked-cloze".into(),
+                    reply_type: "bankedcloze".into(),
+                    question_text: String::new(),
+                    options: vec![opts("unique"), opts("strong"), opts("high")],
+                    option_count: 3,
+                },
+                ChildQ {
+                    question_type: "material-banked-cloze".into(),
+                    reply_type: "bankedcloze".into(),
+                    question_text: String::new(),
+                    options: vec![opts("Unique"), opts("collective"), opts("strong")],
+                    option_count: 3,
+                },
+            ],
+        };
+        assert_eq!(word_bank(&m), vec!["unique", "strong", "high", "collective"]);
+    }
+
+    #[test]
+    fn banked_canonicalize_matches_bank() {
+        let words = vec!["unique".to_string(), "collective".to_string(), "high".to_string()];
+        let parts = split_numbered("1. Unique 2. Collective 3. HIGH");
+        assert_eq!(
+            canonicalize_banked(&parts, &words, 3),
+            vec!["unique", "collective", "high"]
+        );
+        let partial = split_numbered("1. unique");
+        assert_eq!(canonicalize_banked(&partial, &words, 3), vec!["unique", "", ""]);
+    }
+
+    #[test]
+    fn shuffled_words_use_each_once() {
+        let words = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let mut all = shuffled_words(&words, 3);
+        all.sort();
+        assert_eq!(all, vec!["a", "b", "c"]);
+        let padded = shuffled_words(&words, 5);
+        assert_eq!(padded.iter().filter(|s| s.is_empty()).count(), 2);
     }
 }

@@ -1,16 +1,16 @@
-# UnipusAI —— U校园 AI 版刷课脚本（Rust 版）
+# UnipusAI —— U校园 AI 版刷课脚本
 
 本项目是原 Python + Selenium 版（v2.4）的 **Rust 完全重写版**：
 不需要浏览器、不需要 WebDriver，纯命令行 + 原生 HTTP 实现，更轻量、更快、更稳定
 ### 原项目bug较多，如想用浏览器自动化方案请看[这个](https://github.com/YSJohnson/UnipusAI-Helper/tree/main)
 ### 该项目在测试阶段，可能存在诸多问题，欢迎各位到issue留言
-> 原 Python 版本（`Unipus_v2.4.py`、`AudioRecognizer.py`、`EnvironmentChecker.py` 等）及 PyInstaller 打包产物均已从仓库移除，仅保留 Rust 实现。
+> 原 Python 版本（`Unipus_v2.4.py`、`AudioRecognizer.py`、`EnvironmentChecker.py` 等）及 PyInstaller 打包产物均已从仓库移除。
 
 ## 主要功能
 
 - **全自动刷课**：遍历课程全部单元/任务组，自动解析并作答提交，跳过已通过的章节。
 - **AI 答题**：接入任意 OpenAI 兼容接口（DeepSeek / Kimi 等），覆盖选择、填空、简答等常见题型。
-- **本地语音/视频转写**：对无内嵌字幕的音频/视频模块，用 ffmpeg + OpenAI Whisper 本地转写后作答，不依赖在线语音识别服务。
+- **本地语音/视频转写**：对无内嵌字幕的音频/视频模块，用 ffmpeg + Whisper 本地转写后作答，不依赖在线语音识别服务。
 - **纯命令行工具**：提供 `progress` / `run` / `group` / `debug` / `test-types` / `transcribe` / `dump-text` 等命令，方便调试与验证。
 - **爬取课程的目录，题目文本和媒体转写**：`dump-text`工具可以爬取课程题目和媒体转写
 
@@ -216,14 +216,16 @@ UnipusAI <params>
 ```
 ### params
 ```
-progress               打印课程全部单元/任务树（按 learning_strategy 过滤）
-run [unitId...]        默认自动完成全课程，也可指定单元
-group <groupId>        直接提交指定任务组（LLM 答题）
-debug <groupId>        本地求解指定任务组（不提交，用于调试）
-test-types             每种题型抽一题测试答题链路（不提交）
-transcribe <url>       测试媒体转写链路（下载→ffmpeg→whisper）
-dump-text [unitId...]  打印全部题目文本与媒体转写，每任务组一个文件到 dump_text/（不答题）
-                       已存在的任务组文件跳过，--force 清空并重新生成
+progress [--names]       打印课程全部单元/任务树（按 learning_strategy 过滤）
+run [--names] [unitId...]  默认自动完成全课程，也可指定单元
+group <groupId>          直接提交指定任务组（LLM 答题）
+debug <groupId>          本地求解指定任务组（不提交，用于调试）
+test-types               每种题型抽一题测试答题链路（不提交）
+transcribe <url>         测试媒体转写链路（下载→ffmpeg→whisper）
+dump-text [--names] [--force] [unitId...]  打印全部题目文本与媒体转写，每任务组一个文件到 dump_text/（不答题）
+                         已存在的任务组文件跳过，--force 清空并重新生成
+--names                  显示课程名与单元名（如 新视野大学英语(第四版)读写教程 / U1 Pre-reading activities），
+                         结果缓存到 .unit_labels.json，不传则不额外请求
 ```
 
 ### 转写与文本导出
