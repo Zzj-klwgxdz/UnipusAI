@@ -19,7 +19,8 @@
 *dump-text*
 ![running](./imgs/running.png)
 *running*
-
+![debug](./imgs/debug.png)
+*debug*
 ## 技术栈
 
 | 组件 | 用途 |
