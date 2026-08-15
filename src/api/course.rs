@@ -209,11 +209,27 @@ pub fn course_display_name(course_id: &str) -> String {
         }
         _ => (code, ""),
     };
-    let name = match base {
-        "nhce_v4_rw" => "新视野大学英语(第四版)读写教程",
-        "nhce_v4_ls" => "新视野大学英语(第四版)听说教程",
-        "nhce_v4_ur" => "新视野大学英语(第四版)视听说教程",
-        _ => return code.to_string(),
+    let mut name = String::new();
+    let mut parts = base.split('_');
+    let (course, version,kind) = (
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default()
+    );
+    match course {
+        "nhce" => name.push_str("新视野大学英语"),
+        _ => name.push_str(&format!("未知书本({})", course)),
+    }
+    if let Some(version) = version.strip_prefix("v"){
+        name.push_str(&format!("(第{}版)",version));
+    }else{
+        name.push_str(&format!("未知版本({})",version));
+    }
+    match kind{
+        "rw" => name.push_str("读写教程"),
+        "ls" => name.push_str("视听说教程"),
+        "ur" => name.push_str("视听说教程"),
+        _ => name.push_str(&format!("未知课程({})",kind))
     };
     if book.is_empty() {
         name.to_string()
@@ -229,13 +245,13 @@ mod tests {
     #[test]
     fn course_display_known_and_fallback() {
         assert_eq!(
-            course_display_name("course-v2:75b7546ea002b72+nhce_v4_rw_2+20230116"),
-            "新视野大学英语(第四版)读写教程 2"
+            course_display_name("course-v2:75b7546ea002b72+nhce_v3_rw_4+20230116"),
+            "新视野大学英语(第3版)读写教程 4"
         );
         assert_eq!(
             course_display_name("course-v2:75b7546ea002b72+nhce_v4_rw+20230116"),
-            "新视野大学英语(第四版)读写教程"
+            "新视野大学英语(第4版)读写教程"
         );
-        assert_eq!(course_display_name("course-v2:x+yz_3+9"), "yz_3");
+        assert_eq!(course_display_name("course-v2:x+yz_3+9"), "未知书本(yz)未知版本()未知课程() 3");
     }
 }
