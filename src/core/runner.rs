@@ -1,9 +1,13 @@
 use crate::api::content::{decrypt_content, fetch_content, parse_decrypted};
-use crate::api::course::{build_tasks, fetch_course_progress, fetch_course_units, fetch_unit, select_tasks, GroupTask};
+use crate::api::course::{
+    GroupTask, build_tasks, fetch_course_progress, fetch_course_units, fetch_unit, select_tasks,
+};
 use crate::api::parser::parse_group;
 use crate::api::session::Session;
-use crate::api::submit::{build_answer_payload, build_mark_seen_payload, empty_answers, submit_raw};
-use anyhow::{bail, Result};
+use crate::api::submit::{
+    build_answer_payload, build_mark_seen_payload, empty_answers, submit_raw,
+};
+use anyhow::{Result, bail};
 use log::{error, info};
 
 pub async fn process_group(session: &Session, task: &GroupTask) -> Result<serde_json::Value> {
@@ -93,10 +97,7 @@ pub async fn run_course_units(
                     error!("[FAIL] {} {} -> {:#}", task.tab_type, task.group_id, e);
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_millis(
-                session.cfg().interval_ms,
-            ))
-            .await;
+            tokio::time::sleep(std::time::Duration::from_millis(session.cfg().interval_ms)).await;
         }
     }
     Ok(summary)

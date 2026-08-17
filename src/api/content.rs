@@ -1,6 +1,6 @@
-use crate::api::session::{content_url, Session};
-use aes::cipher::{BlockDecrypt, KeyInit};
+use crate::api::session::{Session, content_url};
 use aes::Aes128;
+use aes::cipher::{BlockDecrypt, KeyInit};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
@@ -44,10 +44,7 @@ pub async fn fetch_content(session: &Session, group_id: &str) -> Result<FetchedC
 /// 密文格式: "unipus.<hex>" 或 "<hex>"；key = "1a2b3c4d" + k 截取前 16 字节；
 /// AES-128-ECB + ZeroPadding。
 pub fn decrypt_content(content: &str, k: &str) -> Result<String> {
-    let hex = content
-        .strip_prefix("unipus.")
-        .unwrap_or(content)
-        .trim();
+    let hex = content.strip_prefix("unipus.").unwrap_or(content).trim();
     if hex.is_empty() {
         return Ok(String::new());
     }

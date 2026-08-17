@@ -1,8 +1,8 @@
-﻿use crate::api::parser::{build_context, ParsedGroup};
-use crate::api::session::{submit_url, Session};
+use crate::api::parser::{ParsedGroup, build_context};
+use crate::api::session::{Session, submit_url};
 use anyhow::{Context, Result};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// 子题作答。
 #[derive(Debug, Clone)]

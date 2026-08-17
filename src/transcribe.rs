@@ -13,10 +13,7 @@ fn sha1(s: &str) -> String {
     use sha1::{Digest, Sha1};
     let mut h = Sha1::new();
     h.update(s.as_bytes());
-    h.finalize()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect()
+    h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 fn which(cmd: &str) -> Option<std::path::PathBuf> {
@@ -43,8 +40,7 @@ async fn download_media(session: &Session, url: &str, dest: &PathBuf) -> Result<
     if bytes.is_empty() {
         anyhow::bail!("媒体下载为空: {}", url);
     }
-    std::fs::write(dest, &bytes)
-        .with_context(|| format!("保存媒体失败: {}", dest.display()))?;
+    std::fs::write(dest, &bytes).with_context(|| format!("保存媒体失败: {}", dest.display()))?;
     Ok(())
 }
 
@@ -102,8 +98,8 @@ fn whisper_infer(wav: &PathBuf, model: &str, language: &str) -> Result<String> {
     let mut options = whisper_core::TranscribeOptions::default();
     options.decode_options.language = lang_opt;
     options.verbose = Some(false);
-    let result = whisper_core::transcribe_file(wp_model, wav, &options)
-        .context("whisper 转录失败")?;
+    let result =
+        whisper_core::transcribe_file(wp_model, wav, &options).context("whisper 转录失败")?;
     Ok(result.text.trim().to_string())
 }
 
@@ -120,22 +116,20 @@ fn load_whisper_model(
         .parse()
         .with_context(|| format!("未知 whisper 模型: {model}"))?;
     let repo = which.hf_repo();
-    let endpoint = std::env::var("HF_ENDPOINT")
-        .unwrap_or_else(|_| "https://huggingface.co".to_string());
+    let endpoint =
+        std::env::var("HF_ENDPOINT").unwrap_or_else(|_| "https://huggingface.co".to_string());
 
     let cache_root = std::env::var_os("HF_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| {
-            std::env::var_os("XDG_CACHE_HOME")
-                .map(|p| PathBuf::from(p).join("huggingface"))
+            std::env::var_os("XDG_CACHE_HOME").map(|p| PathBuf::from(p).join("huggingface"))
         })
         .or_else(|| {
             std::env::var_os("USERPROFILE")
                 .map(|p| PathBuf::from(p).join(".cache").join("huggingface"))
         })
         .or_else(|| {
-            std::env::var_os("HOME")
-                .map(|p| PathBuf::from(p).join(".cache").join("huggingface"))
+            std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".cache").join("huggingface"))
         })
         .unwrap_or_else(|| PathBuf::from(".whisper_cache"));
     let model_dir = cache_root
@@ -165,8 +159,7 @@ fn load_whisper_model(
         Ok(Some(dest))
     };
 
-    let config = fetch("config.json")?
-        .ok_or_else(|| anyhow::anyhow!("下载 config.json 为空"))?;
+    let config = fetch("config.json")?.ok_or_else(|| anyhow::anyhow!("下载 config.json 为空"))?;
     let weights = fetch("model.safetensors")?
         .ok_or_else(|| anyhow::anyhow!("下载 model.safetensors 为空"))?;
     let generation_config = fetch("generation_config.json")?;

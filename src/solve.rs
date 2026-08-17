@@ -1,7 +1,7 @@
-use crate::api::parser::{truncate_text, ChildQ, Module, OptionItem};
+use crate::api::parser::{ChildQ, Module, OptionItem, truncate_text};
 use crate::api::session::Session;
 use crate::llm;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 const SYSTEM_PROMPT: &str = "你是一个专业的英语教学助手，擅长分析英语题目。\
 请根据题目要求给出准确答案，注意区分不同题型：\
@@ -38,7 +38,10 @@ fn material_context(m: &Module) -> Option<String> {
         parts.push(truncate_text(&m.material, 4000));
     }
     if !m.transcript.is_empty() {
-        parts.push(format!("【视频/音频字幕】\n{}", truncate_text(&m.transcript, 4000)));
+        parts.push(format!(
+            "【视频/音频字幕】\n{}",
+            truncate_text(&m.transcript, 4000)
+        ));
     }
     if !m.direction.is_empty() {
         parts.push(format!("【答题说明】{}", m.direction));
@@ -76,10 +79,18 @@ async fn media_context(session: &Session, m: &Module) -> Option<String> {
         m.media_sources.len(),
         joined.chars().count()
     );
-    Some(format!("【音频/视频转写内容】\n{}", truncate_text(&joined, 5000)))
+    Some(format!(
+        "【音频/视频转写内容】\n{}",
+        truncate_text(&joined, 5000)
+    ))
 }
 
-async fn choice_prompt(session: &Session, m: &Module, c: &ChildQ, is_multi: bool) -> Result<String> {
+async fn choice_prompt(
+    session: &Session,
+    m: &Module,
+    c: &ChildQ,
+    is_multi: bool,
+) -> Result<String> {
     let mut lines: Vec<String> = Vec::new();
     if let Some(ctx) = material_context(m) {
         lines.push(ctx);
@@ -158,7 +169,11 @@ async fn solve_batch(session: &Session, m: &Module) -> Result<Vec<String>> {
     }
     lines.push(format!(
         "【{}题】共 {} 小题，请依次作答：",
-        if m.reply_type == "fillblank" { "填空" } else { "简答" },
+        if m.reply_type == "fillblank" {
+            "填空"
+        } else {
+            "简答"
+        },
         count
     ));
     for (i, c) in m.children.iter().enumerate() {
@@ -210,14 +225,21 @@ async fn solve_banked_cloze(session: &Session, m: &Module) -> Result<Vec<String>
         lines.push(ctx);
         lines.push(String::new());
     }
-    lines.push("【选词填空】短文中共有 {} 个编号空格（____1____、____2____…），词库如下：".replace("{}", &count.to_string()));
+    lines.push(
+        "【选词填空】短文中共有 {} 个编号空格（____1____、____2____…），词库如下："
+            .replace("{}", &count.to_string()),
+    );
     lines.push(words.join("、"));
     lines.push(String::new());
     lines.push("请为每个编号空格选择最合适的单词，每个词限用一次。".to_string());
     lines.push("请按题号回答，格式：1.单词 2.单词 3.单词 ...（只输出单词本身）".to_string());
     let prompt = lines.join("\n");
     match llm::ask(session, SYSTEM_PROMPT, &prompt).await {
-        Ok(ans) => Ok(canonicalize_banked(&parse_banked(&ans, count), &words, count)),
+        Ok(ans) => Ok(canonicalize_banked(
+            &parse_banked(&ans, count),
+            &words,
+            count,
+        )),
         Err(e) => {
             if session.cfg().fallback_on_llm_failure {
                 log::warn!("LLM 失败，选词填空随机兜底: {:#}", e);
@@ -234,7 +256,11 @@ fn word_bank(m: &Module) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for c in &m.children {
         for o in &c.options {
-            let w = if o.value.is_empty() { o.name.clone() } else { o.value.clone() };
+            let w = if o.value.is_empty() {
+                o.name.clone()
+            } else {
+                o.value.clone()
+            };
             let w = if w.is_empty() { o.text.clone() } else { w };
             if !w.is_empty() && !out.iter().any(|x| x.eq_ignore_ascii_case(&w)) {
                 out.push(w);
@@ -249,7 +275,9 @@ fn shuffled_words(words: &[String], count: usize) -> Vec<String> {
     use rand::seq::SliceRandom;
     let mut pool = words.to_vec();
     pool.shuffle(&mut rand::thread_rng());
-    (0..count).map(|i| pool.get(i).cloned().unwrap_or_default()).collect()
+    (0..count)
+        .map(|i| pool.get(i).cloned().unwrap_or_default())
+        .collect()
 }
 
 /// 规整解析出的答案：去尾部标点、忽略大小写归一到词库原词，缺位留空。
@@ -275,7 +303,13 @@ fn canonicalize_banked(parts: &[String], words: &[String], count: usize) -> Vec<
 fn valid_labels(options: &[OptionItem]) -> Vec<String> {
     options
         .iter()
-        .map(|o| if o.name.is_empty() { o.value.clone() } else { o.name.clone() })
+        .map(|o| {
+            if o.name.is_empty() {
+                o.value.clone()
+            } else {
+                o.name.clone()
+            }
+        })
         .collect()
 }
 
@@ -342,7 +376,9 @@ fn split_numbered(ans: &str) -> Vec<String> {
             while i < n && bytes[i].is_ascii_digit() {
                 i += 1;
             }
-            if i < n && (bytes[i] == b'.' || bytes[i] == b')' || bytes[i] == b']' || bytes[i] == b'>') {
+            if i < n
+                && (bytes[i] == b'.' || bytes[i] == b')' || bytes[i] == b']' || bytes[i] == b'>')
+            {
                 let _ = start;
                 i += 1;
                 while i < n && (bytes[i] == b' ' || bytes[i] == b'\t') {
@@ -410,8 +446,16 @@ mod tests {
     #[test]
     fn parse_single_works() {
         let opts = vec![
-            OptionItem { name: "A".into(), value: "A".into(), text: "x".into() },
-            OptionItem { name: "B".into(), value: "B".into(), text: "y".into() },
+            OptionItem {
+                name: "A".into(),
+                value: "A".into(),
+                text: "x".into(),
+            },
+            OptionItem {
+                name: "B".into(),
+                value: "B".into(),
+                text: "y".into(),
+            },
         ];
         assert_eq!(parse_single("1. B 正确答案是B", &opts), "B");
         assert_eq!(parse_multi("答案是 A、B、D", &opts), "A,B");
@@ -419,7 +463,10 @@ mod tests {
 
     #[test]
     fn parse_banked_order() {
-        assert_eq!(split_numbered("1. apple 2. banana"), vec!["apple", "banana"]);
+        assert_eq!(
+            split_numbered("1. apple 2. banana"),
+            vec!["apple", "banana"]
+        );
         assert_eq!(parse_banked("1. one 2. two", 2), vec!["one", "two"]);
     }
 
@@ -455,19 +502,29 @@ mod tests {
                 },
             ],
         };
-        assert_eq!(word_bank(&m), vec!["unique", "strong", "high", "collective"]);
+        assert_eq!(
+            word_bank(&m),
+            vec!["unique", "strong", "high", "collective"]
+        );
     }
 
     #[test]
     fn banked_canonicalize_matches_bank() {
-        let words = vec!["unique".to_string(), "collective".to_string(), "high".to_string()];
+        let words = vec![
+            "unique".to_string(),
+            "collective".to_string(),
+            "high".to_string(),
+        ];
         let parts = split_numbered("1. Unique 2. Collective 3. HIGH");
         assert_eq!(
             canonicalize_banked(&parts, &words, 3),
             vec!["unique", "collective", "high"]
         );
         let partial = split_numbered("1. unique");
-        assert_eq!(canonicalize_banked(&partial, &words, 3), vec!["unique", "", ""]);
+        assert_eq!(
+            canonicalize_banked(&partial, &words, 3),
+            vec!["unique", "", ""]
+        );
     }
 
     #[test]

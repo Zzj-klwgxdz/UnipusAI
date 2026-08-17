@@ -1,4 +1,4 @@
-use crate::api::session::{progress_url, unit_progress_url, Session};
+use crate::api::session::{Session, progress_url, unit_progress_url};
 use anyhow::Result;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -204,32 +204,34 @@ pub fn course_display_name(course_id: &str) -> String {
     let code = course_id.split('+').nth(1).unwrap_or(course_id);
     // 课程代码尾部可能是册号，如 nhce_v4_rw_2 -> 基础代码 nhce_v4_rw + 册号 2
     let (base, book) = match code.rfind('_') {
-        Some(i) if !code[i + 1..].is_empty() && code[i + 1..].chars().all(|c| c.is_ascii_digit()) => {
+        Some(i)
+            if !code[i + 1..].is_empty() && code[i + 1..].chars().all(|c| c.is_ascii_digit()) =>
+        {
             (&code[..i], &code[i + 1..])
         }
         _ => (code, ""),
     };
     let mut name = String::new();
     let mut parts = base.split('_');
-    let (course, version,kind) = (
+    let (course, version, kind) = (
         parts.next().unwrap_or_default(),
         parts.next().unwrap_or_default(),
-        parts.next().unwrap_or_default()
+        parts.next().unwrap_or_default(),
     );
     match course {
         "nhce" => name.push_str("新视野大学英语"),
         _ => name.push_str(&format!("未知书本({})", course)),
     }
-    if let Some(version) = version.strip_prefix("v"){
-        name.push_str(&format!("(第{}版)",version));
-    }else{
-        name.push_str(&format!("未知版本({})",version));
+    if let Some(version) = version.strip_prefix("v") {
+        name.push_str(&format!("(第{}版)", version));
+    } else {
+        name.push_str(&format!("未知版本({})", version));
     }
-    match kind{
+    match kind {
         "rw" => name.push_str("读写教程"),
         "ls" => name.push_str("视听说教程"),
         "ur" => name.push_str("视听说教程"),
-        _ => name.push_str(&format!("未知课程({})",kind))
+        _ => name.push_str(&format!("未知课程({})", kind)),
     };
     if book.is_empty() {
         name.to_string()
@@ -252,6 +254,9 @@ mod tests {
             course_display_name("course-v2:75b7546ea002b72+nhce_v4_rw+20230116"),
             "新视野大学英语(第4版)读写教程"
         );
-        assert_eq!(course_display_name("course-v2:x+yz_3+9"), "未知书本(yz)未知版本()未知课程() 3");
+        assert_eq!(
+            course_display_name("course-v2:x+yz_3+9"),
+            "未知书本(yz)未知版本()未知课程() 3"
+        );
     }
 }

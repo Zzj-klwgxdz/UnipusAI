@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 use crate::api::session::Session;
@@ -29,8 +29,7 @@ pub async fn ask(session: &Session, system: &str, prompt: &str) -> Result<String
             Err(e) => {
                 last_err = Some(e);
                 if attempt < 2 {
-                    tokio::time::sleep(Duration::from_millis(500 * (attempt as u64 + 1)))
-                        .await;
+                    tokio::time::sleep(Duration::from_millis(500 * (attempt as u64 + 1))).await;
                 }
             }
         }
@@ -80,7 +79,10 @@ async fn send_once(
             return Ok(s.to_string());
         }
     }
-    Err(anyhow::anyhow!("LLM 响应缺少内容: {}", truncate(&body, 200)))
+    Err(anyhow::anyhow!(
+        "LLM 响应缺少内容: {}",
+        truncate(&body, 200)
+    ))
 }
 
 fn normalize_base(base: &str) -> String {
@@ -94,7 +96,10 @@ fn normalize_base(base: &str) -> String {
 
 /// host-only（http(s)://host[:port]，无路径）则返回 true。
 fn is_bare_host(b: &str) -> bool {
-    let rest = match b.strip_prefix("https://").or_else(|| b.strip_prefix("http://")) {
+    let rest = match b
+        .strip_prefix("https://")
+        .or_else(|| b.strip_prefix("http://"))
+    {
         Some(r) => r,
         None => return b.contains('.'),
     };
@@ -118,7 +123,10 @@ mod tests {
 
     #[test]
     fn normalize_host() {
-        assert_eq!(normalize_base("https://api.deepseek.com"), "https://api.deepseek.com/v1");
+        assert_eq!(
+            normalize_base("https://api.deepseek.com"),
+            "https://api.deepseek.com/v1"
+        );
         assert_eq!(
             normalize_base("https://api.deepseek.com/"),
             "https://api.deepseek.com/v1"

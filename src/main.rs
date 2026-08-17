@@ -1,7 +1,7 @@
-use anyhow::Result;
-use std::path::PathBuf;
 use UnipusAI::api::session::Session;
 use UnipusAI::config::Config;
+use anyhow::Result;
+use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -19,8 +19,20 @@ async fn main() -> Result<()> {
 
     match cmd {
         "progress" => cmd_progress(&session, &args[2..]).await?,
-        "group" => cmd_group(&session, args.get(2).map(|s| s.as_str()).unwrap_or_default()).await?,
-        "debug" => cmd_debug(&session, args.get(2).map(|s| s.as_str()).unwrap_or_default()).await?,
+        "group" => {
+            cmd_group(
+                &session,
+                args.get(2).map(|s| s.as_str()).unwrap_or_default(),
+            )
+            .await?
+        }
+        "debug" => {
+            cmd_debug(
+                &session,
+                args.get(2).map(|s| s.as_str()).unwrap_or_default(),
+            )
+            .await?
+        }
         "run" => cmd_run(session, &args[2..]).await?,
         "test-types" => cmd_test_types(&session).await?,
         "transcribe" => {
@@ -41,7 +53,7 @@ async fn main() -> Result<()> {
 async fn cmd_test_types(session: &Session) -> Result<()> {
     use UnipusAI::api::content::{decrypt_content, fetch_content, parse_decrypted};
     use UnipusAI::api::course::{fetch_course_units, fetch_unit};
-    use UnipusAI::api::parser::{parse_group, Module};
+    use UnipusAI::api::parser::{Module, parse_group};
     use std::collections::BTreeMap;
 
     let units = fetch_course_units(session).await?;
@@ -54,19 +66,27 @@ async fn cmd_test_types(session: &Session) -> Result<()> {
             if leaf.tab_type != "task" {
                 continue;
             }
-            let Ok(fc) = fetch_content(session, gid).await else { continue };
-            let Ok(plain) = decrypt_content(&fc.content, &fc.k) else { continue };
-            let Ok(dec) = parse_decrypted(&plain) else { continue };
-            let Ok(group) = parse_group(&dec) else { continue };
+            let Ok(fc) = fetch_content(session, gid).await else {
+                continue;
+            };
+            let Ok(plain) = decrypt_content(&fc.content, &fc.k) else {
+                continue;
+            };
+            let Ok(dec) = parse_decrypted(&plain) else {
+                continue;
+            };
+            let Ok(group) = parse_group(&dec) else {
+                continue;
+            };
             for m in &group.modules {
                 if m.children.is_empty() {
                     continue;
                 }
                 for (ci, c) in m.children.iter().enumerate() {
                     let key = format!("{} / {}", m.module_type, c.reply_type);
-                    samples.entry(key).or_insert_with(|| {
-                        (uid.clone(), gid.clone(), m.clone(), ci)
-                    });
+                    samples
+                        .entry(key)
+                        .or_insert_with(|| (uid.clone(), gid.clone(), m.clone(), ci));
                 }
             }
         }
@@ -86,7 +106,13 @@ async fn cmd_test_types(session: &Session) -> Result<()> {
         } else {
             format!("{}个", m.media_sources.len())
         };
-        print!("[{:<4}] {} 题干={} 媒体={} ...", format!("{}/{}", key, ci), gid, qtext, media);
+        print!(
+            "[{:<4}] {} 题干={} 媒体={} ...",
+            format!("{}/{}", key, ci),
+            gid,
+            qtext,
+            media
+        );
         match UnipusAI::solve::solve_module(session, m).await {
             Ok(vals) => {
                 let ans = vals.get(*ci).cloned().unwrap_or_default();
@@ -124,7 +150,10 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
     fs::create_dir_all(OUT_DIR)?;
 
     if with_names {
-        println!("课程: {}", UnipusAI::api::course::course_display_name(session.course_id()));
+        println!(
+            "课程: {}",
+            UnipusAI::api::course::course_display_name(session.course_id())
+        );
     }
 
     let units = if unit_ids.is_empty() {
@@ -153,10 +182,18 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
                 n_skipped += 1;
                 continue;
             }
-            let Ok(fc) = fetch_content(session, gid).await else { continue };
-            let Ok(plain) = decrypt_content(&fc.content, &fc.k) else { continue };
-            let Ok(dec) = parse_decrypted(&plain) else { continue };
-            let Ok(group) = parse_group(&dec) else { continue };
+            let Ok(fc) = fetch_content(session, gid).await else {
+                continue;
+            };
+            let Ok(plain) = decrypt_content(&fc.content, &fc.k) else {
+                continue;
+            };
+            let Ok(dec) = parse_decrypted(&plain) else {
+                continue;
+            };
+            let Ok(group) = parse_group(&dec) else {
+                continue;
+            };
 
             if with_names && !unit_header_printed {
                 if unit_label.is_empty() {
@@ -173,7 +210,10 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
 
             n_group += 1;
             let mut lines: Vec<String> = Vec::new();
-            lines.push(format!("==== 单元 {} / 任务组 {} ({}) ====", uid, gid, leaf.tab_type));
+            lines.push(format!(
+                "==== 单元 {} / 任务组 {} ({}) ====",
+                uid, gid, leaf.tab_type
+            ));
 
             for m in &group.modules {
                 n_module += 1;
@@ -187,17 +227,29 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
                     lines.push(format!("【答题说明】\n{}", m.direction));
                 }
                 if !m.material.is_empty() {
-                    lines.push(format!("【材料文本】({}字)\n{}", m.material.chars().count(), m.material));
+                    lines.push(format!(
+                        "【材料文本】({}字)\n{}",
+                        m.material.chars().count(),
+                        m.material
+                    ));
                 }
                 if !m.transcript.is_empty() {
-                    lines.push(format!("【内嵌字幕】({}字)\n{}", m.transcript.chars().count(), m.transcript));
+                    lines.push(format!(
+                        "【内嵌字幕】({}字)\n{}",
+                        m.transcript.chars().count(),
+                        m.transcript
+                    ));
                 }
                 for url in &m.media_sources {
                     n_media += 1;
                     match UnipusAI::transcribe::transcribe_media(session, url).await {
                         Ok(t) => {
                             n_media_chars += t.chars().count();
-                            lines.push(format!("【媒体转写】(来源 {})\n{}", url, truncate_text(&t, 5000)));
+                            lines.push(format!(
+                                "【媒体转写】(来源 {})\n{}",
+                                url,
+                                truncate_text(&t, 5000)
+                            ));
                         }
                         Err(e) => {
                             lines.push(format!("【媒体转写失败】(来源 {})\n{:#}", url, e));
@@ -214,8 +266,16 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
                             .options
                             .iter()
                             .map(|o| {
-                                let label = if o.name.is_empty() { o.value.clone() } else { o.name.clone() };
-                                let txt = if o.text.is_empty() { o.value.clone() } else { o.text.clone() };
+                                let label = if o.name.is_empty() {
+                                    o.value.clone()
+                                } else {
+                                    o.name.clone()
+                                };
+                                let txt = if o.text.is_empty() {
+                                    o.value.clone()
+                                } else {
+                                    o.text.clone()
+                                };
                                 format!("{}: {}", label, truncate_text(&txt, 100))
                             })
                             .collect();
@@ -331,7 +391,12 @@ async fn cmd_transcribe(session: &Session, url: &str) -> Result<()> {
     let media = UnipusAI::api::parser::clean_url(url);
     let start = std::time::Instant::now();
     let text = UnipusAI::transcribe::transcribe_media(session, &media).await?;
-    println!("[{}] {}ms 转写结果 {} 字:", url, start.elapsed().as_millis(), text.chars().count());
+    println!(
+        "[{}] {}ms 转写结果 {} 字:",
+        url,
+        start.elapsed().as_millis(),
+        text.chars().count()
+    );
     if text.is_empty() {
         anyhow::bail!("转写为空，请确认 whisper_enabled=true 且 ffmpeg 可用、模型已下载");
     }
@@ -367,7 +432,12 @@ async fn cmd_progress(session: &Session, args: &[String]) -> Result<()> {
             let label = UnipusAI::api::course::unit_label(session, &unit.unit_id)
                 .await?
                 .unwrap_or_else(|| format!("Unit {}", i + 1));
-            println!("单元 {} ({}) ：任务 {} 个", unit.unit_id, label, unit.tasks.len());
+            println!(
+                "单元 {} ({}) ：任务 {} 个",
+                unit.unit_id,
+                label,
+                unit.tasks.len()
+            );
         } else {
             println!("单元 {} ：任务 {} 个", unit.unit_id, unit.tasks.len());
         }
@@ -382,10 +452,7 @@ async fn cmd_progress(session: &Session, args: &[String]) -> Result<()> {
             );
         }
     }
-    println!(
-        "总计 {} 个任务，待完成 {} 个",
-        plan.total, plan.todo
-    );
+    println!("总计 {} 个任务，待完成 {} 个", plan.total, plan.todo);
     Ok(())
 }
 

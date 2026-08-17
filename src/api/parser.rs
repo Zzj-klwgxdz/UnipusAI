@@ -147,11 +147,7 @@ fn collect_material(content: &Value) -> (String, Vec<String>, String) {
     // 去重保序
     let mut seen = std::collections::HashSet::new();
     media.retain(|m| seen.insert(m.clone()));
-    (
-        parts.join("\n\n"),
-        media,
-        transcript.join("\n\n"),
-    )
+    (parts.join("\n\n"), media, transcript.join("\n\n"))
 }
 
 /// 从解密后的 content 解析题目模块。
@@ -168,7 +164,12 @@ pub fn parse_group(decrypted: &Value) -> Result<ParsedGroup> {
 
     for module in modules {
         let instance_id = get_str(module, &["id"])
-            .or_else(|| module.get("id").and_then(|x| x.as_i64()).map(|x| x.to_string()))
+            .or_else(|| {
+                module
+                    .get("id")
+                    .and_then(|x| x.as_i64())
+                    .map(|x| x.to_string())
+            })
             .unwrap_or_default();
         if instance_id.is_empty() {
             continue;
@@ -177,7 +178,13 @@ pub fn parse_group(decrypted: &Value) -> Result<ParsedGroup> {
             .get("content")
             .and_then(|c| c.as_str())
             .and_then(|s| serde_json::from_str::<Value>(s).ok())
-            .or_else(|| module.get("content").and_then(|c| c.as_object()).cloned().map(Value::Object))
+            .or_else(|| {
+                module
+                    .get("content")
+                    .and_then(|c| c.as_object())
+                    .cloned()
+                    .map(Value::Object)
+            })
             .clone();
         let Some(content) = content else {
             continue;
@@ -195,9 +202,11 @@ pub fn parse_group(decrypted: &Value) -> Result<ParsedGroup> {
         let mut child_qs = Vec::new();
         for child in children {
             let question_type = get_str(&child, &["type"]).unwrap_or_else(|| module_type.clone());
-            let reply_type = get_str(&child, &["replyType"]).unwrap_or_else(|| "text-area".to_string());
-            let question_text =
-                get_str(&child, &["quesText", "text"]).map(|s| strip_html_short(&s)).unwrap_or_default();
+            let reply_type =
+                get_str(&child, &["replyType"]).unwrap_or_else(|| "text-area".to_string());
+            let question_text = get_str(&child, &["quesText", "text"])
+                .map(|s| strip_html_short(&s))
+                .unwrap_or_default();
             let option_items: Vec<Value> = child
                 .get("options")
                 .and_then(|o| o.as_array())
@@ -209,7 +218,9 @@ pub fn parse_group(decrypted: &Value) -> Result<ParsedGroup> {
                 .map(|o| OptionItem {
                     name: get_str(o, &["name", "value"]).unwrap_or_default(),
                     value: get_str(o, &["value", "name"]).unwrap_or_default(),
-                    text: get_str(o, &["text"]).map(|s| strip_html(&s)).unwrap_or_default(),
+                    text: get_str(o, &["text"])
+                        .map(|s| strip_html(&s))
+                        .unwrap_or_default(),
                 })
                 .collect();
             child_qs.push(ChildQ {
@@ -268,7 +279,13 @@ pub fn extract_group_label(decrypted: &Value) -> String {
             .get("content")
             .and_then(|c| c.as_str())
             .and_then(|s| serde_json::from_str::<Value>(s).ok())
-            .or_else(|| module.get("content").and_then(|c| c.as_object()).cloned().map(Value::Object));
+            .or_else(|| {
+                module
+                    .get("content")
+                    .and_then(|c| c.as_object())
+                    .cloned()
+                    .map(Value::Object)
+            });
         let Some(content) = content else { continue };
         if let Some(arr) = content.get("contents").and_then(|c| c.as_array()) {
             for item in arr {

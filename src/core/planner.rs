@@ -1,4 +1,4 @@
-use crate::api::course::{build_tasks, fetch_course_units, fetch_unit, select_tasks, GroupTask};
+use crate::api::course::{GroupTask, build_tasks, fetch_course_units, fetch_unit, select_tasks};
 use anyhow::Result;
 
 #[derive(Debug, Default)]

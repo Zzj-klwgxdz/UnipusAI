@@ -114,8 +114,8 @@ impl Config {
         }
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("读取配置失败: {}", path.display()))?;
-        let cfg: Config = serde_json::from_str(&text)
-            .with_context(|| "解析配置失败，请检查 config.json 格式")?;
+        let cfg: Config =
+            serde_json::from_str(&text).with_context(|| "解析配置失败，请检查 config.json 格式")?;
         cfg.validate()?;
         Ok(cfg)
     }

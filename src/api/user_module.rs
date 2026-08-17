@@ -1,4 +1,4 @@
-use crate::api::session::{content_url, user_module_url, Session};
+use crate::api::session::{Session, content_url, user_module_url};
 use anyhow::Result;
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
