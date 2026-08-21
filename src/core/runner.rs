@@ -5,16 +5,46 @@ use crate::api::course::{
 use crate::api::parser::parse_group;
 use crate::api::session::Session;
 use crate::api::submit::{
-    build_answer_payload, build_mark_seen_payload, empty_answers, submit_raw,
+    RateLimited, build_answer_payload, build_mark_seen_payload, empty_answers, submit_raw,
 };
 use anyhow::{Result, bail};
 use log::{error, info};
+
+/// 提交并处理限频：命中限频则等待冷却后重试（仅重做提交，不重复 LLM 作答）。
+async fn submit_with_rate_retry(session: &Session, payload: &str) -> Result<serde_json::Value> {
+    const MAX_RETRIES: u32 = 5;
+    const COOLDOWN_SECS: u64 = 180;
+    let mut attempt = 0u32;
+    loop {
+        match submit_raw(session, payload).await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                if !e.is::<RateLimited>() {
+                    return Err(e);
+                }
+                attempt += 1;
+                if attempt >= MAX_RETRIES {
+                    return Err(e);
+                }
+                let secs = COOLDOWN_SECS * (attempt as u64);
+                log::warn!(
+                    "触发限频，等待 {} 秒后重试 ({}/{}): {}",
+                    secs,
+                    attempt,
+                    MAX_RETRIES,
+                    e
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+            }
+        }
+    }
+}
 
 pub async fn process_group(session: &Session, task: &GroupTask) -> Result<serde_json::Value> {
     match task.tab_type.as_str() {
         "text" | "video" => {
             let payload = build_mark_seen_payload(session, &task.group_id)?;
-            submit_raw(session, &payload).await
+            submit_with_rate_retry(session, &payload).await
         }
         "task" => {
             let rt = fetch_content(session, &task.group_id).await?;
@@ -31,7 +61,7 @@ pub async fn process_group(session: &Session, task: &GroupTask) -> Result<serde_
                 }
             }
             let payload = build_answer_payload(session, &task.group_id, &modules)?;
-            submit_raw(session, &payload).await
+            submit_with_rate_retry(session, &payload).await
         }
         other => bail!("未知 tab_type: {}", other),
     }

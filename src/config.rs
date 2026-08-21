@@ -68,7 +68,7 @@ fn default_temperature() -> f32 {
 }
 
 fn default_interval_ms() -> u64 {
-    1200
+    3000
 }
 
 impl Default for Config {

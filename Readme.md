@@ -2,14 +2,15 @@
 
 本项目是原 Python + Selenium 版（v2.4）的 **Rust 完全重写版**：
 不需要浏览器、不需要 WebDriver，纯命令行 + 原生 HTTP 实现，更轻量、更快、更稳定
-### 原项目bug较多，如想用浏览器自动化方案请看[这个](https://github.com/YSJohnson/UnipusAI-Helper/tree/main)
+### 原项目bug较多，如想用浏览器自动化方案请看[这个](https://github.com/YSJohnson/UnipusAI-Helper)
 ### 该项目在测试阶段，可能存在诸多问题，欢迎各位到issue留言
-> 原 Python 版本（`Unipus_v2.4.py`、`AudioRecognizer.py`、`EnvironmentChecker.py` 等）及 PyInstaller 打包产物均已从仓库移除。
+> 原 Python 版本（`Unipus_v2.4.py`、`AudioRecognizer.py`、`EnvironmentChecker.py` 等）已归档到release/UnipusAI_v2.4分支。
 
 ## 主要功能
 
 - **全自动刷课**：遍历课程全部单元/任务组，自动解析并作答提交，跳过已通过的章节。
 - **AI 答题**：接入任意 OpenAI 兼容接口（DeepSeek / Kimi 等），覆盖选择、填空、简答等常见题型。
+- **限频自动重试**：提交命中服务端"操作过于频繁"时，自动等待冷却（递增 180s，最多 5 次）后重试，无需手动干预。
 - **本地语音/视频转写**：对无内嵌字幕的音频/视频模块，用 ffmpeg + Whisper 本地转写后作答，不依赖在线语音识别服务。
 - **纯命令行工具**：提供 `progress` / `run` / `group` / `debug` / `test-types` / `transcribe` / `dump-text` 等命令，方便调试与验证。
 - **爬取课程的目录，题目文本和媒体转写**：`dump-text`工具可以爬取课程题目和媒体转写
@@ -105,7 +106,6 @@ ParsedGroup
 当模块**既有媒体又没有文本/字幕**时才触发：
 
 ```
-```
 vtt/srt 字幕 → 直接下载并解析纯文本
 音频/视频   → 下载 → ffmpeg 转 16k 单声道 wav → 本地 whisper 转写（纯 Rust，candle 推理）
 ```
@@ -120,18 +120,19 @@ vtt/srt 字幕 → 直接下载并解析纯文本
 
 ### 7. 提交
 `build_answer_payload` 构造 `submit` 接口所需的 `quesDatas`（每模块一个 instance，每子题一个 answer JSON），连同 `courseId`、`openId`、`publish_version` 等一并提交。`text`/`video` 类任务只调"标记已看"接口。
+提交若命中服务端限频（响应 `code=600001/600002`，或 `msg` 含"操作过于频繁"），程序自动等待冷却（递增 180s，最多 5 次）后重试该次提交，仅重做提交、不重复 LLM 作答。
 
 ## 使用方法
 
 ### 构建
 
-需要 Rust 工具链（建议 latest stable）：
+需要 Rust 工具链：
 
 ```bash
 cargo build --release
 ```
 **注意使用release模式编译，使用debug模式会导致转写速度大幅下降**
-### 依赖（可选）
+### 依赖
 
 - **ffmpeg**：语音转写前置，需加入 PATH。
 - **whisper 模型**：转写用模型（默认 `base`），首次转写时自动从 HuggingFace 下载并缓存到 `~/.cache/whisper-candle/`；可通过环境变量 `HF_ENDPOINT=https://hf-mirror.com` 使用国内镜像。
@@ -218,13 +219,15 @@ UnipusAI <params>
 ### params
 ```
 progress [--names]       打印课程全部单元/任务树（按 learning_strategy 过滤）
-run [--names] [unitId...]  默认自动完成全课程，也可指定单元
+run [--names] [--interval <毫秒>] [unitId...]  默认自动完成全课程，也可指定单元
+                          --interval 两次提交间隔（毫秒），默认 3000，如 --interval 5000 或 --interval=5000
 group <groupId>          直接提交指定任务组（LLM 答题）
 debug <groupId>          本地求解指定任务组（不提交，用于调试）
 test-types               每种题型抽一题测试答题链路（不提交）
 transcribe <url>         测试媒体转写链路（下载→ffmpeg→whisper）
 dump-text [--names] [--force] [unitId...]  打印全部题目文本与媒体转写，每任务组一个文件到 dump_text/（不答题）
                          已存在的任务组文件跳过，--force 清空并重新生成
+=========================================================================================================
 --names                  显示课程名与单元名（如 新视野大学英语(第四版)读写教程 / U1 Pre-reading activities），
                          结果缓存到 .unit_labels.json，不传则不额外请求
 ```

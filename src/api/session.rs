@@ -33,6 +33,11 @@ impl Session {
         &self.cfg
     }
 
+    /// 运行时覆盖提交间隔（毫秒），不写回 config.json。
+    pub fn set_interval_ms(&mut self, ms: u64) {
+        self.cfg.interval_ms = ms;
+    }
+
     pub fn set_publish_version(&mut self, version: &str) -> Result<()> {
         if version.is_empty() || version == self.cfg.publish_version {
             return Ok(());

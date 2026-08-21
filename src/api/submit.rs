@@ -4,6 +4,37 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+/// submit 命中服务端限频（操作过于频繁）。
+/// 供上层捕获后等待冷却并重试。
+#[derive(Debug)]
+pub struct RateLimited {
+    pub code: String,
+    pub msg: String,
+}
+
+impl std::fmt::Display for RateLimited {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "限频提交被拒 (code={} msg={})", self.code, self.msg)
+    }
+}
+
+impl std::error::Error for RateLimited {}
+
+/// 判断响应是否限频：msg 含关键字优先，其次命中常见限频 code。
+pub fn is_rate_limited(v: &Value) -> bool {
+    let msg = v
+        .get("msg")
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .to_string();
+    let msg_limited = msg.contains("操作过于频繁");
+    let code_limited = v
+        .get("code")
+        .and_then(|c| c.as_i64())
+        .is_some_and(|c| matches!(c, 600001 | 600002));
+    msg_limited || code_limited
+}
+
 /// 子题作答。
 #[derive(Debug, Clone)]
 pub struct ChildAnw {
@@ -183,12 +214,23 @@ pub async fn submit_raw(session: &Session, payload: &str) -> Result<Value> {
         anyhow::bail!("submit HTTP {}", status);
     }
     let v: Value = serde_json::from_str(&body)?;
-    if v.get("code").and_then(|c| c.as_i64()) != Some(0) {
+    let code = v.get("code").and_then(|c| c.as_i64());
+    if code != Some(0) {
+        let code_s = v.get("code").map(|c| c.to_string()).unwrap_or_default();
+        let msg = v.get("msg").and_then(|m| m.as_str()).unwrap_or("");
+        let message = v.get("message").and_then(|m| m.as_str()).unwrap_or("");
+        if is_rate_limited(&v) {
+            return Err(RateLimited {
+                code: code_s,
+                msg: msg.to_string(),
+            }
+            .into());
+        }
         anyhow::bail!(
-            "submit 返回错误: {}",
-            v.get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown")
+            "submit code={} msg={} message={}",
+            code_s,
+            msg,
+            message
         );
     }
     Ok(v)

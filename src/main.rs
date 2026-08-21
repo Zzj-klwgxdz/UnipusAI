@@ -1,6 +1,6 @@
 use UnipusAI::api::session::Session;
 use UnipusAI::config::Config;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 #[tokio::main]
@@ -418,6 +418,35 @@ fn split_flag(args: &[String], flag: &str) -> (bool, Vec<String>) {
     (present, rest)
 }
 
+/// 提取带值的标志，支持 "--flag value" 与 "--flag=value"。
+/// 返回 (取值, 其余参数)；出现但缺值时 value 为 None。
+fn extract_flag_value(args: &[String], flag: &str) -> (Option<String>, Vec<String>) {
+    let mut value: Option<String> = None;
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if let Some(rest_part) = a.strip_prefix(&format!("{}=", flag)) {
+            value = Some(rest_part.to_string());
+        } else if a == flag {
+            if let Some(next) = args.get(i + 1) {
+                if next.starts_with('-') {
+                    value = None;
+                } else {
+                    value = Some(next.clone());
+                    i += 1;
+                }
+            } else {
+                value = None;
+            }
+        } else {
+            rest.push(a.clone());
+        }
+        i += 1;
+    }
+    (value, rest)
+}
+
 async fn cmd_progress(session: &Session, args: &[String]) -> Result<()> {
     use UnipusAI::api::course::course_display_name;
     use UnipusAI::core::planner::plan_course;
@@ -456,8 +485,19 @@ async fn cmd_progress(session: &Session, args: &[String]) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_run(mut session: Session, unit_ids: &[String]) -> Result<()> {
-    let (with_names, unit_ids) = split_flag(unit_ids, "--names");
+async fn cmd_run(mut session: Session, args: &[String]) -> Result<()> {
+    let (with_names, rest) = split_flag(args, "--names");
+    let (interval, unit_ids) = extract_flag_value(&rest, "--interval");
+    if let Some(v) = interval {
+        let ms: u64 = v
+            .trim()
+            .parse()
+            .with_context(|| format!("--interval 需要毫秒数（正整数），收到: {}", v))?;
+        session.set_interval_ms(ms);
+        println!("提交间隔设为 {}ms", ms);
+    } else {
+        println!("提交间隔使用默认 {}ms", session.cfg().interval_ms);
+    }
     let summary = if unit_ids.is_empty() {
         UnipusAI::core::runner::run_course(&mut session, with_names).await?
     } else {
@@ -475,7 +515,8 @@ fn print_help() {
         r#"UnipusAI
 用法:
   UnipusAI progress [--names]    打印课程全部单元/任务树(按 learning_strategy 过滤)
-  UnipusAI run [--names] [unitId...]  默认自动完成全课程(按 learning_strategy)，也可指定单元
+  UnipusAI run [--names] [--interval <毫秒>] [unitId...]  默认自动完成全课程(按 learning_strategy)，也可指定单元
+                                     --interval 两次提交间隔，默认 3000ms，如 --interval 5000 或 --interval=5000
   UnipusAI group <groupId>    直接提交指定任务组(LLM 答题)
   UnipusAI debug <groupId>    本地求解指定任务组(不提交，用于调试)
   UnipusAI test-types         每种题型抽一题测试答题链路(不提交，用于全部章节已完成的场景)
@@ -486,4 +527,41 @@ fn print_help() {
 配置见 config.json，unit_id 已无需填写
 "#
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_interval_space_form() {
+        let args = vec!["--names".to_string(), "--interval".to_string(), "5000".to_string()];
+        let (v, rest) = extract_flag_value(&args, "--interval");
+        assert_eq!(v.as_deref(), Some("5000"));
+        assert_eq!(rest, vec!["--names"]);
+    }
+
+    #[test]
+    fn extract_interval_equals_form() {
+        let args = vec!["--interval=8000".to_string(), "unit1".to_string()];
+        let (v, rest) = extract_flag_value(&args, "--interval");
+        assert_eq!(v.as_deref(), Some("8000"));
+        assert_eq!(rest, vec!["unit1"]);
+    }
+
+    #[test]
+    fn extract_interval_missing_value() {
+        let args = vec!["--interval".to_string(), "--names".to_string()];
+        let (v, rest) = extract_flag_value(&args, "--interval");
+        assert_eq!(v, None);
+        assert_eq!(rest, vec!["--names"]);
+    }
+
+    #[test]
+    fn extract_interval_absent() {
+        let args = vec!["unit1".to_string(), "unit2".to_string()];
+        let (v, rest) = extract_flag_value(&args, "--interval");
+        assert_eq!(v, None);
+        assert_eq!(rest, args);
+    }
 }
