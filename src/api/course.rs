@@ -198,9 +198,82 @@ pub async fn unit_label(session: &Session, unit_id: &str) -> Result<Option<Strin
     Ok(None)
 }
 
+
+/// 进程内按 course_id 缓存课程名，避免重复请求该接口。
+fn course_name_cache() -> &'static Mutex<BTreeMap<String, String>> {
+    static CACHE: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+/// 首页课程列表接口：value.courseList[].courseResourceList[].instanceId 与 course_id 一致，
+/// name 为可读课程名。注意该接口返回 code=1/success，不能用 get_json（其要求 code==0）。
+const HOME_COURSE_LIST_URL: &str = "https://uai.unipus.cn/api/cmgt/course/getHomeCourseListByStudent";
+
+/// 查询课程名：优先用首页课程列表接口按 instanceId 精确匹配，
+/// 失败或未命中时回退到 course_display_name_fallback 的启发式解析。
+pub async fn course_display_name(session: &Session, course_id: &str) -> String {
+    if let Ok(guard) = course_name_cache().lock() {
+        if let Some(name) = guard.get(course_id) {
+            return name.clone();
+        }
+    }
+    let name = match course_display_name_lookup(session, course_id).await {
+        Some(n) if !n.is_empty() => n,
+        _ => course_display_name_fallback(course_id),
+    };
+    if let Ok(mut guard) = course_name_cache().lock() {
+        guard.insert(course_id.to_string(), name.clone());
+    }
+    name
+}
+
+/// 调用首页课程列表接口，返回与 course_id 匹配的课程名；无匹配或失败返回 None。
+/// 失败路径会打 WARN，便于排查（该接口返回 code=1/success，整体不按 code==0 判定）。
+pub async fn course_display_name_lookup(session: &Session,course_id: &str,) -> Option<String> {
+    fn truncate300(s: &str) -> String {
+        if s.chars().count() <= 300 {
+            s.to_string()
+        } else {
+            format!("{}…", s.chars().take(300).collect::<String>())
+        }
+    }
+    let body = match session.get_bytes(HOME_COURSE_LIST_URL).await {
+        Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+        Err(e) => {
+            log::warn!("首页课程列表请求失败: {:#}", e);
+            return None;
+        }
+    };
+    let v: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("首页课程列表响应非 JSON: {:#}; body={}", e, truncate300(&body));
+            return None;
+        }
+    };
+    let Some(courses) = v.pointer("/value/courseList").and_then(|c| c.as_array()) else {
+        log::warn!("首页课程列表缺少 value.courseList; body={}", truncate300(&body));
+        return None;
+    };
+    for course in courses {
+        let Some(res_list) = course.get("courseResourceList").and_then(|r| r.as_array()) else {
+            continue;
+        };
+        for res in res_list {
+            let inst = res.get("instanceId").and_then(|i| i.as_str()).unwrap_or("");
+            if inst == course_id {
+                return res.get("name").and_then(|n| n.as_str()).map(str::to_string);
+            }
+        }
+    }
+    log::warn!("首页课程列表未找到匹配 course_id={} 的资源", course_id);
+    None
+}
+
+
 /// 从 course_id 中解析课程代码并映射为可读课程名；未知代码回退到代码段本身。
 /// 例：`course-v2:...nhce_v4_rw_2+...` -> `新视野大学英语(第四版)读写教程 2`。
-pub fn course_display_name(course_id: &str) -> String {
+pub fn course_display_name_fallback(course_id: &str) -> String {
     let code = course_id.split('+').nth(1).unwrap_or(course_id);
     // 课程代码尾部可能是册号，如 nhce_v4_rw_2 -> 基础代码 nhce_v4_rw + 册号 2
     let (base, book) = match code.rfind('_') {
@@ -247,15 +320,15 @@ mod tests {
     #[test]
     fn course_display_known_and_fallback() {
         assert_eq!(
-            course_display_name("course-v2:75b7546ea002b72+nhce_v3_rw_4+20230116"),
+            course_display_name_fallback("course-v2:75b7546ea002b72+nhce_v3_rw_4+20230116"),
             "新视野大学英语(第3版)读写教程 4"
         );
         assert_eq!(
-            course_display_name("course-v2:75b7546ea002b72+nhce_v4_rw+20230116"),
+            course_display_name_fallback("course-v2:75b7546ea002b72+nhce_v4_rw+20230116"),
             "新视野大学英语(第4版)读写教程"
         );
         assert_eq!(
-            course_display_name("course-v2:x+yz_3+9"),
+            course_display_name_fallback("course-v2:x+yz_3+9"),
             "未知书本(yz)未知版本()未知课程() 3"
         );
     }

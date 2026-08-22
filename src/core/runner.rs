@@ -87,7 +87,7 @@ pub async fn run_course_units(
     if with_names {
         info!(
             "课程: {}",
-            crate::api::course::course_display_name(session.course_id())
+            crate::api::course::course_display_name(session, session.course_id()).await
         );
     }
     for (ui, unit_id) in unit_ids.iter().enumerate() {

@@ -152,7 +152,7 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
     if with_names {
         println!(
             "课程: {}",
-            UnipusAI::api::course::course_display_name(session.course_id())
+            UnipusAI::api::course::course_display_name(session, session.course_id()).await
         );
     }
 
@@ -453,7 +453,10 @@ async fn cmd_progress(session: &Session, args: &[String]) -> Result<()> {
     let with_names = args.iter().any(|a| a == "--names");
     let plan = plan_course(session).await?;
     if with_names {
-        println!("课程: {}", course_display_name(session.course_id()));
+        println!(
+            "课程: {}",
+            course_display_name(session, session.course_id()).await
+        );
     }
     println!("学习策略: {}", session.cfg().learning_strategy);
     for (i, unit) in plan.units.iter().enumerate() {

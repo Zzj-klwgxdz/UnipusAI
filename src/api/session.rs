@@ -197,7 +197,7 @@ fn build_base_headers(cfg: &Config) -> reqwest::header::HeaderMap {
 }
 
 fn default_ua() -> String {
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0".to_string()
+    String::from("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0")
 }
 
 fn truncate(s: &str, n: usize) -> String {

@@ -245,6 +245,17 @@ cargo test
 
 覆盖内容解密（ZeroPadding）、多选/单选答案解析、编号填空拆分、LLM 地址归一化、VTT 字幕解析、媒体 URL 提取等。
 
+## 更新日志
+### 26/8/10
+增加了--names参数,修复了bankedcloze类题目的逻辑
+### 26/8/15
+改进了课程名识别逻辑
+### 26/8/21
+增加服务端限频自动冷却
+### 26/8/22
+新发现`https://uai.unipus.cn/api/cmgt/course/getHomeCourseListByStudent`接口，已应用于课程名的精确识别
+> UnipusAI_v3.1 release还未应用
+
 ## 许可证
 
 本项目在 [GNU GPL v3.0](LICENSE) 下发布。
