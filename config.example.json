@@ -9,7 +9,7 @@
   "publish_version": "",
   "api_key": "",
   "base_url": "https://api.deepseek.com",
-  "model": "deepseek-v4-flash",
+  "model": "deepseek-flash",
   "learning_strategy": "learn_all_compusory_course",
   "max_tokens": 2000,
   "temperature": 0.3,

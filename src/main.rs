@@ -346,14 +346,17 @@ async fn cmd_debug(session: &Session, group_id: &str) -> Result<()> {
     let rt = fetch_content(session, group_id).await?;
     let plain = decrypt_content(&rt.content, &rt.k)?;
     let dec = parse_decrypted(&plain)?;
+    println!("=== 解密后完整 JSON ===");
+    println!("{}", serde_json::to_string_pretty(&dec)?);
     let group = parse_group(&dec)?;
     for m in &group.modules {
         println!(
-            "[module {}] reply_type={} children={} material_len={}",
+            "[module {}] reply_type={} children={} material_len={} word_bank={}",
             m.instance_id,
             m.reply_type,
             m.children.len(),
-            m.material.chars().count()
+            m.material.chars().count(),
+            m.word_bank.len()
         );
         let values = UnipusAI::solve::solve_module(session, m).await?;
         for (ci, c) in m.children.iter().enumerate() {

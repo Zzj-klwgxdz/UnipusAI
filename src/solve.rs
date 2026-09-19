@@ -251,8 +251,25 @@ async fn solve_banked_cloze(session: &Session, m: &Module) -> Result<Vec<String>
     }
 }
 
-/// 词库：按 children 顺序去重收集选项单词（value 优先，回退 name/text）。
+/// 词库：优先使用模块级 word_bank（bankedcloze），回退到从 children 收集选项。
 fn word_bank(m: &Module) -> Vec<String> {
+    // 优先使用模块级词库（选词填空的词库在模块级 options 字段）
+    if !m.word_bank.is_empty() {
+        return m
+            .word_bank
+            .iter()
+            .map(|o| {
+                let w = if o.value.is_empty() {
+                    o.name.clone()
+                } else {
+                    o.value.clone()
+                };
+                if w.is_empty() { o.text.clone() } else { w }
+            })
+            .filter(|w| !w.is_empty())
+            .collect();
+    }
+    // 回退：从子题收集选项（兼容其他题型）
     let mut out: Vec<String> = Vec::new();
     for c in &m.children {
         for o in &c.options {
@@ -485,6 +502,7 @@ mod tests {
             media_sources: Vec::new(),
             transcript: String::new(),
             reply_type: "bankedcloze".into(),
+            word_bank: Vec::new(),
             children: vec![
                 ChildQ {
                     question_type: "material-banked-cloze".into(),

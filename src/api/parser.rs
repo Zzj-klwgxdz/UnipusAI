@@ -38,6 +38,8 @@ pub struct Module {
     pub media_sources: Vec<String>,
     /// 内嵌字幕文本（contents[].text，如 WEBVTT）
     pub transcript: String,
+    /// 模块级词库（用于 bankedcloze 选词填空）
+    pub word_bank: Vec<OptionItem>,
     pub children: Vec<ChildQ>,
 }
 
@@ -193,6 +195,20 @@ pub fn parse_group(decrypted: &Value) -> Result<ParsedGroup> {
         let reply_type = get_str(&content, &["replyType"]).unwrap_or_default();
         let direction = direction_text(&content);
         let (material, media_sources, transcript) = collect_material(&content);
+        let word_bank = content
+            .get("options")
+            .and_then(|o| o.as_array())
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|o| OptionItem {
+                name: get_str(o, &["name", "value"]).unwrap_or_default(),
+                value: get_str(o, &["value", "name"]).unwrap_or_default(),
+                text: get_str(o, &["text"])
+                    .map(|s| strip_html(&s))
+                    .unwrap_or_default(),
+            })
+            .collect();
         let children = content
             .get("children")
             .and_then(|c| c.as_array())
@@ -240,6 +256,7 @@ pub fn parse_group(decrypted: &Value) -> Result<ParsedGroup> {
             media_sources,
             transcript,
             reply_type,
+            word_bank,
             children: child_qs,
         });
     }

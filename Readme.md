@@ -2,8 +2,9 @@
 
 本项目是原 Python + Selenium 版（v2.4）的 **Rust 完全重写版**：
 不需要浏览器、不需要 WebDriver，纯命令行 + 原生 HTTP 实现，更轻量、更快、更稳定
-### 原项目bug较多，如想用浏览器自动化方案请看[这个](https://github.com/YSJohnson/UnipusAI-Helper)
+### 原python项目bug较多，如想用浏览器自动化方案请看[这个](https://github.com/YSJohnson/UnipusAI-Helper),这个项目继承了原python版本的主要功能，并优化了用户体验
 ### 该项目在测试阶段，可能存在诸多问题，欢迎各位到issue留言
+### 本人英语已免修，所以目前只能借用别人的账号调试，并且学业繁忙，更新频率下降
 > 原 Python 版本（`Unipus_v2.4.py`、`AudioRecognizer.py`、`EnvironmentChecker.py` 等）已删除。
 
 ## 主要功能
@@ -123,7 +124,6 @@ vtt/srt 字幕 → 直接下载并解析纯文本
 提交若命中服务端限频（响应 `code=600001/600002`，或 `msg` 含"操作过于频繁"），程序自动等待冷却（递增 180s，最多 5 次）后重试该次提交，仅重做提交、不重复 LLM 作答。
 
 ## 使用方法
-
 ### 构建
 
 需要 Rust 工具链：
@@ -134,10 +134,10 @@ cargo build --release
 **注意使用release模式编译，使用debug模式会导致转写速度大幅下降**
 ### 依赖
 
-- **ffmpeg**：语音转写前置，需加入 PATH。
+- **ffmpeg**：语音转写前置，需将ffmpeg的bin文件夹加入系统PATH，例如`C:\ffmpeg\bin`
 - **whisper 模型**：转写用模型（默认 `base`），首次转写时自动从 HuggingFace 下载并缓存到 `~/.cache/whisper-candle/`；可通过环境变量 `HF_ENDPOINT=https://hf-mirror.com` 使用国内镜像。
 
-不配置这两者时程序仍可运行，只是带语音无字幕的题目会缺少材料。
+不配置这两者时程序仍可运行，但是带语音无字幕的题目会缺少材料。
 
 ### 配置
 
@@ -154,8 +154,8 @@ copy config.example.json config.json
 | `timeout` | 否 | HTTP 超时秒数，默认 10 |
 | `cookie` | **是** | 浏览器登录后的 Cookie |
 | `authorization` | **是** | ucontent JWT（Authorization 头） |
-| `x_annotator_auth_token` | 否 | 批注鉴权 token（从浏览器复制） |
-| `u_school` | 否 | 学校编号 |
+| `x_annotator_auth_token` | **是** | 批注鉴权 token |
+| `u_school` | **是** | 学校编号 |
 | `course_id` | **是** | 课程 id，如 `course-v2:...` |
 | `open_id` | **是** | 用户 open id |
 | `publish_version` | 是 | 课程发布版本号（会自动更新） |
@@ -184,8 +184,8 @@ copy config.example.json config.json
 | `cookie` | 该请求 `Headers` → Request Headers → `Cookie` 整条值 |
 | `authorization` | 同一请求头里的 `Authorization`（登录 JWT，`eyJ...`） |
 | `x_annotator_auth_token` | 同一请求头 `x-annotator-auth-token`（若无该头可留空） |
-| `u_school` | 同一请求头 `u-school`（学校编号，如 `8320`） |
-| `open_id` | 请求 URL 路径中的 open_id 段，或用 [jwt.io](https://jwt.io) 解码 `authorization` 载荷里的 `openId` |
+| `u_school` | 主页里的redDot请求里的`u-school`（学校编号，如 `8320`） |
+| `open_id` | 请求 URL 路径中的 open_id 段，在`publish_version`同一个页面|
 | `course_id` | 请求 URL 路径中的 `course-v2:...` 段（如 `/course/api/v2/course_progress/course-v2:xxx/`） |
 | `publish_version` | `course_progress` 接口响应体 `rt.publish_version` 字段 |
 | `api_key` / `base_url` / `model` | 大模型厂商控制台申请（DeepSeek / Moonshot / Kimi 等），如 DeepSeek 平台生成 `sk-xxx`，`base_url=https://api.deepseek.com`，`model=deepseek-v4-flash` |
@@ -201,7 +201,7 @@ copy config.example.json config.json
 ![x_auth](/imgs/X-Auth.png)
 ![cookie](/imgs/cookie.png)
 ![publish_version](/imgs/publish_version.png)
-![open_id](/imgs/how%20to%20get%20openid.png)
+![u_school](/imgs/u_school.png)
 
 ### 命令
 在源代码根目录
@@ -247,15 +247,15 @@ cargo test
 
 ## 更新日志
 ### 26/8/10
-增加了--names参数,修复了bankedcloze类题目的逻辑
+增加了--names参数,修复了banked_cloze类题目的逻辑
 ### 26/8/15
 改进了课程名识别逻辑
 ### 26/8/21
 增加服务端限频自动冷却
 ### 26/8/22
 新发现`https://uai.unipus.cn/api/cmgt/course/getHomeCourseListByStudent`接口，已应用于课程名的精确识别
-> UnipusAI_v3.1 release还未应用
-
+### 26/9/19
+修复了选词填空题目获取不到given_words的问题
 ## 许可证
 
 本项目在 [GNU GPL v3.0](LICENSE) 下发布。
