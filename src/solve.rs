@@ -9,6 +9,10 @@ const SYSTEM_PROMPT: &str = "你是一个专业的英语教学助手，擅长分
 
 /// 逐个模块求解，返回每个子题的作答值（按 children 顺序）。
 pub async fn solve_module(session: &Session, m: &Module) -> Result<Vec<String>> {
+    // 无子题模块（vocabulary 单词卡朗读、视频弹题、纯阅读材料等）无需作答。
+    if m.children.is_empty() {
+        return Ok(Vec::new());
+    }
     match m.reply_type.as_str() {
         "singlechoice" | "multichoice" => {
             let mut out = Vec::with_capacity(m.children.len());
@@ -19,6 +23,8 @@ pub async fn solve_module(session: &Session, m: &Module) -> Result<Vec<String>> 
         }
         "fillblank" | "text-area" => solve_batch(session, m).await,
         "bankedcloze" => solve_banked_cloze(session, m).await,
+        "discussion" => solve_discussion(session, m).await,
+        "vocabulary" => Ok(Vec::new()),
         other => {
             let mut out = Vec::with_capacity(m.children.len());
             for c in &m.children {
@@ -249,6 +255,75 @@ async fn solve_banked_cloze(session: &Session, m: &Module) -> Result<Vec<String>
             }
         }
     }
+}
+
+/// 讨论题：根据答题说明与讨论问题，用 LLM 生成一段英文讨论发言。
+/// 每个 child 返回同一份发言草稿（实际发帖由 runner/bbs 负责）。
+async fn solve_discussion(session: &Session, m: &Module) -> Result<Vec<String>> {
+    let count = m.children.len().max(1);
+    if !session.cfg().use_llm() {
+        return Ok(vec![DISCUSSION_FALLBACK.to_string(); count]);
+    }
+    let mut lines: Vec<String> = Vec::new();
+    if !m.direction.is_empty() {
+        lines.push(format!("【答题说明】{}", m.direction));
+        lines.push(String::new());
+    }
+    if !m.material.is_empty() {
+        lines.push(format!("【讨论题目】\n{}", truncate_text(&m.material, 3000)));
+    } else if let Some(ctx) = media_context(session, m).await {
+        lines.push(ctx);
+    }
+    lines.push(String::new());
+    lines.push(
+        "请根据以上讨论题目写一段英文讨论发言（约 100-150 词），需回应全部问题，\
+         观点明确、语言自然。只输出发言正文，不要编号、标题或引号。"
+            .to_string(),
+    );
+    let prompt = lines.join("\n");
+    match llm::ask(session, SYSTEM_PROMPT, &prompt).await {
+        Ok(ans) => {
+            let text = clean_discussion_text(&ans);
+            if text.is_empty() {
+                Ok(vec![DISCUSSION_FALLBACK.to_string(); count])
+            } else {
+                Ok(vec![text; count])
+            }
+        }
+        Err(e) => {
+            if session.cfg().fallback_on_llm_failure {
+                log::warn!("LLM 失败，讨论题使用兜底发言: {:#}", e);
+                Ok(vec![DISCUSSION_FALLBACK.to_string(); count])
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// 无 LLM 或生成失败时的兜底发言（保证讨论任务仍能提交）。
+const DISCUSSION_FALLBACK: &str =
+    "In my opinion, this is an interesting and meaningful topic. Based on my own experience, \
+     I believe we can learn a lot from it. It has taught me to think more carefully and to \
+     appreciate different perspectives. I would like to share more thoughts with my classmates.";
+
+/// 清理 LLM 输出：去掉 markdown 代码围栏与首尾引号。
+fn clean_discussion_text(s: &str) -> String {
+    let mut t = s.trim().to_string();
+    if t.starts_with("```") {
+        if let Some(pos) = t.find('\n') {
+            t = t[pos + 1..].to_string();
+        }
+        if let Some(end) = t.rfind("```") {
+            t.truncate(end);
+        }
+        t = t.trim().to_string();
+    }
+    let quotes: &[char] = &['"', '\'', '“', '”', '‘', '’'];
+    if t.chars().count() >= 2 && t.starts_with(quotes) && t.ends_with(quotes) {
+        t = t.trim_matches(quotes).trim().to_string();
+    }
+    t
 }
 
 /// 词库：优先使用模块级 word_bank（bankedcloze），回退到从 children 收集选项。
@@ -485,6 +560,17 @@ mod tests {
             vec!["apple", "banana"]
         );
         assert_eq!(parse_banked("1. one 2. two", 2), vec!["one", "two"]);
+    }
+
+    #[test]
+    fn discussion_text_cleanup() {
+        assert_eq!(clean_discussion_text("  hello world  "), "hello world");
+        assert_eq!(clean_discussion_text("\"quoted text\""), "quoted text");
+        assert_eq!(
+            clean_discussion_text("```\nMy travel story.\n```"),
+            "My travel story."
+        );
+        assert_eq!(clean_discussion_text("“中文引号”"), "中文引号");
     }
 
     #[test]

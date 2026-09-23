@@ -2,7 +2,7 @@
 /logs
 /.media_cache
 /dump_text
-/__pycache__/
 /config.json
 /.unit_labels.json
 /config_zzj.json
+/tests

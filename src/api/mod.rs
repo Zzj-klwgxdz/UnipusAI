@@ -1,3 +1,4 @@
+pub mod bbs;
 pub mod content;
 pub mod course;
 pub mod parser;

@@ -106,14 +106,28 @@ impl Session {
     }
 
     pub async fn post_raw(&self, url: &str, body: &str) -> Result<(reqwest::StatusCode, String)> {
-        let resp = self
+        self.post_raw_with_auth(url, body, None).await
+    }
+
+    /// 与 post_raw 相同，但可用 authorization 覆盖默认头（讨论区 BBS 令牌回退使用）。
+    pub async fn post_raw_with_auth(
+        &self,
+        url: &str,
+        body: &str,
+        authorization: Option<&str>,
+    ) -> Result<(reqwest::StatusCode, String)> {
+        let mut rb = self
             .client
             .post(url)
             .header("accept", "application/json, text/plain, */*")
             .header("content-type", "application/json; charset=UTF-8")
-            .body(body.to_string())
-            .send()
-            .await?;
+            .body(body.to_string());
+        if let Some(auth) = authorization
+            && let Ok(value) = reqwest::header::HeaderValue::from_str(auth)
+        {
+            rb = rb.header("authorization", value);
+        }
+        let resp = rb.send().await?;
         let status = resp.status();
         let text = resp.text().await?;
         Ok((status, text))
@@ -149,10 +163,18 @@ fn build_base_headers(cfg: &Config) -> reqwest::header::HeaderMap {
             reqwest::header::HeaderValue::from_str(cfg.cookie.as_str()).unwrap(),
         );
     }
-    if !cfg.authorization.is_empty() {
+    // authorization 为空时回退到 cookie 中的 jwt（浏览器两者是同一个 token）。
+    let authorization = if cfg.authorization.is_empty() {
+        cfg.cookie_jwt()
+    } else {
+        Some(cfg.authorization.clone())
+    };
+    if let Some(auth) = authorization
+        && !auth.is_empty()
+    {
         map.insert(
             "authorization",
-            reqwest::header::HeaderValue::from_str(cfg.authorization.as_str()).unwrap(),
+            reqwest::header::HeaderValue::from_str(auth.as_str()).unwrap(),
         );
     }
     if !cfg.x_annotator_auth_token.is_empty() {

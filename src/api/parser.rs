@@ -324,6 +324,54 @@ pub fn extract_group_label(decrypted: &Value) -> String {
     String::new()
 }
 
+/// 单词卡（vocabulary）条目：单词与官方发音 URL。
+#[derive(Debug, Clone, Default)]
+pub struct VocabWord {
+    pub name: String,
+    pub sound: String,
+}
+
+/// 从解密后的组内容提取单词卡（type=vocabulary）的单词列表。
+pub fn extract_vocabulary(decrypted: &Value) -> Vec<VocabWord> {
+    let modules: Vec<&Value> = if let Some(arr) = decrypted.as_array() {
+        arr.iter().collect()
+    } else {
+        vec![decrypted]
+    };
+    let mut out = Vec::new();
+    for module in modules {
+        let content = module
+            .get("content")
+            .and_then(|c| c.as_str())
+            .and_then(|s| serde_json::from_str::<Value>(s).ok())
+            .or_else(|| {
+                module
+                    .get("content")
+                    .and_then(|c| c.as_object())
+                    .cloned()
+                    .map(Value::Object)
+            });
+        let Some(content) = content else { continue };
+        if get_str(&content, &["type"]).as_deref() != Some("vocabulary") {
+            continue;
+        }
+        if let Some(arr) = content.get("contents").and_then(|c| c.as_array()) {
+            for item in arr {
+                let name = get_str(item, &["name"])
+                    .map(|s| strip_html(&s))
+                    .unwrap_or_default();
+                let sound = get_str(item, &["sound"])
+                    .map(|s| clean_url(&s))
+                    .unwrap_or_default();
+                if !name.is_empty() || !sound.is_empty() {
+                    out.push(VocabWord { name, sound });
+                }
+            }
+        }
+    }
+    out
+}
+
 fn looks_like_uuid(s: &str) -> bool {
     s.contains('-') && s.chars().all(|c| c.is_alphanumeric() || c == '-')
 }
@@ -395,5 +443,24 @@ mod tests {
         let json = r#"[{"id":1,"content":"{\"type\":\"x\",\"contents\":[{\"id\":\"uuid-1\",\"text\":\"q\"}]}"}]"#;
         let v: Value = serde_json::from_str(json).unwrap();
         assert_eq!(extract_group_label(&v), "");
+    }
+
+    #[test]
+    fn vocabulary_extract() {
+        let json = r#"[{"id":1,"content":"{\"type\":\"vocabulary\",\"contents\":[{\"name\":\"<p>abolish</p>\",\"sound\":\"https://cdn/a_96k.mp3#duration=1.8&size=29&name=U4TA-01 abolish.mp3\"},{\"name\":\"<p>degrade</p>\",\"sound\":\"https://cdn/d.mp3\"}],\"children\":[]}"}]"#;
+        let v: Value = serde_json::from_str(json).unwrap();
+        let words = extract_vocabulary(&v);
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0].name, "abolish");
+        assert_eq!(words[0].sound, "https://cdn/a_96k.mp3");
+        assert_eq!(words[1].name, "degrade");
+        assert_eq!(words[1].sound, "https://cdn/d.mp3");
+    }
+
+    #[test]
+    fn vocabulary_ignores_other_types() {
+        let json = r#"[{"id":1,"content":"{\"type\":\"basic\",\"contents\":[{\"name\":\"x\",\"sound\":\"https://cdn/a.mp3\"}]}"}]"#;
+        let v: Value = serde_json::from_str(json).unwrap();
+        assert!(extract_vocabulary(&v).is_empty());
     }
 }

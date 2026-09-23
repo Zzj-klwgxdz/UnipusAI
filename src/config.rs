@@ -16,6 +16,12 @@ pub struct Config {
     pub u_school: String,
     #[serde(default)]
     pub course_id: String,
+    /// 班级 id（页面 URL 的 cid），讨论题 BBS 接口使用。
+    #[serde(default)]
+    pub class_id: String,
+    /// AI 版课程 id（页面 URL 的 cloudCurriculaId），讨论题 BBS 接口使用。
+    #[serde(default)]
+    pub curricula_id: String,
     #[serde(default)]
     pub open_id: String,
     #[serde(default)]
@@ -80,6 +86,8 @@ impl Default for Config {
             x_annotator_auth_token: String::new(),
             u_school: String::new(),
             course_id: String::new(),
+            class_id: String::new(),
+            curricula_id: String::new(),
             open_id: String::new(),
             publish_version: String::new(),
             api_key: String::new(),
@@ -130,8 +138,10 @@ impl Config {
         if self.cookie.is_empty() {
             anyhow::bail!("config：cookie 为空，请从浏览器复制");
         }
-        if self.authorization.is_empty() {
-            anyhow::bail!("config：authorization(ucontent JWT) 为空");
+        if self.cookie_jwt().is_none() && self.authorization.is_empty() {
+            anyhow::bail!(
+                "config：cookie 中没有 jwt= 且 authorization 为空，至少需要其一（推荐只填 cookie）"
+            );
         }
         if self.course_id.is_empty() {
             anyhow::bail!("config：course_id 为空，例如 course-v2:...");
@@ -140,5 +150,62 @@ impl Config {
             anyhow::bail!("config：open_id 为空");
         }
         Ok(())
+    }
+
+    /// 从 cookie 中提取 `jwt=` 值（与浏览器 Authorization 头一致）。
+    pub fn cookie_jwt(&self) -> Option<String> {
+        cookie_jwt_from(&self.cookie)
+    }
+}
+
+/// 从 cookie 字符串中提取 `jwt=` 的值。
+pub fn cookie_jwt_from(cookie: &str) -> Option<String> {
+    cookie.split(';').find_map(|part| {
+        let part = part.trim();
+        let value = part.strip_prefix("jwt=")?;
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_config() -> Config {
+        Config {
+            cookie: "a=1; jwt=tok123; b=2".into(),
+            course_id: "course-v2:x".into(),
+            open_id: "open".into(),
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn cookie_jwt_extract() {
+        assert_eq!(
+            cookie_jwt_from("a=1; jwt=tok123; b=2").as_deref(),
+            Some("tok123")
+        );
+        assert_eq!(cookie_jwt_from("jwt=only").as_deref(), Some("only"));
+        assert_eq!(cookie_jwt_from("jwt=; a=1"), None);
+        assert_eq!(cookie_jwt_from("a=1"), None);
+        assert_eq!(cookie_jwt_from(""), None);
+    }
+
+    #[test]
+    fn validate_allows_empty_authorization_with_cookie_jwt() {
+        let cfg = base_config();
+        assert!(cfg.authorization.is_empty());
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_requires_some_jwt() {
+        let mut cfg = base_config();
+        cfg.cookie = "a=1".into();
+        assert!(cfg.validate().is_err());
+        // 没有 cookie jwt 时保留 authorization 也可通过
+        cfg.authorization = "tok".into();
+        assert!(cfg.validate().is_ok());
     }
 }
