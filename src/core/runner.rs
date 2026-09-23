@@ -65,8 +65,21 @@ async fn process_group_inner(session: &Session, task: &GroupTask) -> Result<serd
         "task" => {
             let rt = fetch_content(session, &task.group_id).await?;
             let plain = decrypt_content(&rt.content, &rt.k)?;
-            let dec = parse_decrypted(&plain)?;
-            let group = parse_group(&dec)?;
+            // 内容为空/非 JSON/无题目模块的“浏览类页面”：与浏览器一致，直接标记已看。
+            let group = match parse_decrypted(&plain)
+                .ok()
+                .and_then(|dec| parse_group(&dec).ok())
+            {
+                Some(group) => group,
+                None => {
+                    log::warn!(
+                        "任务组 {} 内容为空/非题目模块，按“浏览即完成”标记已看",
+                        task.group_id
+                    );
+                    let payload = build_mark_seen_payload(session, &task.group_id)?;
+                    return submit_with_rate_retry(session, &payload).await;
+                }
+            };
 
             if group.modules.iter().any(|m| m.reply_type == "discussion") {
                 post_discussion_comments(session, &task.group_id, &group).await?;

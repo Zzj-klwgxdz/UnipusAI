@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 /// dump-text 输出目录。
 pub const DUMP_DIR: &str = "dump_text";
 
+/// 浏览类页面（内容为空/非 JSON/无题目模块）的归档子目录名。
+pub const VIEW_ONLY_DIR: &str = "view-only";
+
 /// 归档题型目录名：reply_type 优先，空回退 module_type；多题型去重后用 + 连接。
 pub fn group_type_name(group: &ParsedGroup) -> String {
     let mut names: Vec<String> = Vec::new();

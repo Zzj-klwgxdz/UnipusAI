@@ -121,7 +121,7 @@ async fn cmd_test_types(session: &Session) -> Result<()> {
 
 /// 打印全部题目文本与媒体转写结果（不答题、不提交）。
 /// 输出结构: dump_text/{单元序号}_{unitId}/{题型}/{groupId}.txt，汇总写入 dump_text/_summary.txt。
-/// task 叶子全量导出；text/video 叶子只导出含讨论题（discussion）或单词卡（vocabulary）的任务组。
+/// 所有叶子全量导出；浏览类页面（内容为空/非 JSON/无题目模块）归档到 {单元}/view-only/。
 /// 文件首行含必修/完成状态：已存在的文件每次只刷新状态（不重新抓题），缺失的才抓取生成；
 /// `--force` 清空重生成（目录结构变更后建议先 --force）。
 async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
@@ -206,29 +206,22 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
                 continue;
             }
 
-            let is_task = leaf.tab_type == "task";
             let Ok(fc) = fetch_content(session, gid).await else {
                 continue;
             };
             let Ok(plain) = decrypt_content(&fc.content, &fc.k) else {
                 continue;
             };
-            let Ok(dec) = parse_decrypted(&plain) else {
-                continue;
-            };
-            let Ok(group) = parse_group(&dec) else {
-                continue;
-            };
-            // 非 task 叶子（text/video）只导出含讨论题或单词卡的任务组
-            let has_discussion = group.modules.iter().any(|m| m.reply_type == "discussion");
-            let has_vocabulary = group.modules.iter().any(|m| m.module_type == "vocabulary");
-            if !is_task && !has_discussion && !has_vocabulary {
-                continue;
-            }
+            // 可解析出题目模块 → 正常归档；否则（空/非 JSON/无模块）为浏览类页面
+            let parsed = parse_decrypted(&plain)
+                .ok()
+                .and_then(|dec| parse_group(&dec).ok().map(|group| (dec, group)));
 
             if with_names && !unit_header_printed {
-                if unit_label.is_empty() {
-                    unit_label = UnipusAI::api::parser::extract_group_label(&dec);
+                if unit_label.is_empty()
+                    && let Some((dec, _)) = &parsed
+                {
+                    unit_label = UnipusAI::api::parser::extract_group_label(dec);
                 }
                 let label = if unit_label.is_empty() {
                     format!("Unit {}", ui + 1)
@@ -242,6 +235,29 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
             n_group += 1;
             let mut lines: Vec<String> = Vec::new();
             lines.push(header);
+
+            let Some((dec, group)) = parsed else {
+                // 浏览类页面（自定义/空内容）：记录状态行与说明，附原始内容（如有）
+                lines.push(String::new());
+                lines.push(
+                    "【浏览类页面】内容为空或无法解析为题目模块（自定义页面），run/group 将直接标记已看。"
+                        .to_string(),
+                );
+                let trimmed = plain.trim();
+                if !trimmed.is_empty() {
+                    lines.push(format!(
+                        "【原始内容】({}字)\n{}",
+                        plain.chars().count(),
+                        truncate_text(trimmed, 2000)
+                    ));
+                }
+                let dir = unit_dir.join(dump::VIEW_ONLY_DIR);
+                let path = dir.join(format!("{}.txt", gid));
+                fs::create_dir_all(&dir)?;
+                fs::write(&path, lines.join("\n"))?;
+                println!("任务组 {} -> {} (浏览类页面)", gid, path.display());
+                continue;
+            };
 
             let vocab = UnipusAI::api::parser::extract_vocabulary(&dec);
             for m in &group.modules {
@@ -386,10 +402,33 @@ async fn cmd_debug(session: &Session, args: &[String]) -> Result<()> {
     }
     let rt = fetch_content(session, group_id).await?;
     let plain = decrypt_content(&rt.content, &rt.k)?;
-    let dec = parse_decrypted(&plain)?;
+    let dec = match parse_decrypted(&plain) {
+        Ok(dec) => dec,
+        Err(_) => {
+            println!("[浏览类页面] 内容为空/非 JSON，无题目数据；run/group 将直接标记已看");
+            let trimmed = plain.trim();
+            if !trimmed.is_empty() {
+                println!(
+                    "【原始内容】({}字)\n{}",
+                    plain.chars().count(),
+                    UnipusAI::api::parser::truncate_text(trimmed, 2000)
+                );
+            }
+            return Ok(());
+        }
+    };
     println!("=== 解密后完整 JSON ===");
     println!("{}", serde_json::to_string_pretty(&dec)?);
-    let group = parse_group(&dec)?;
+    let group = match parse_group(&dec) {
+        Ok(group) => group,
+        Err(e) => {
+            println!(
+                "[浏览类页面] 内容无法解析为题目模块（{:#}），run/group 将直接标记已看",
+                e
+            );
+            return Ok(());
+        }
+    };
     let has_discussion = group.modules.iter().any(|m| m.reply_type == "discussion");
     let vocab = UnipusAI::api::parser::extract_vocabulary(&dec);
     for m in &group.modules {
@@ -662,7 +701,7 @@ fn print_help() {
 
   dump-text [--names] [--force] [unitId...]
       导出题目文本与媒体转写到 dump_text/{{单元序号}}_{{unitId}}/{{题型}}/{{groupId}}.txt（不答题）
-      task 叶子全量导出；text/video 叶子仅导出含讨论题（discussion）或单词卡（vocabulary）的任务组
+      所有叶子全量导出；浏览类页面（内容为空/非 JSON/无题目模块）归入 {{单元}}/view-only/
       文件首行含“必修/完成”状态，每次运行刷新；_summary.txt 为状态汇总
       run/group 答题完成后同样会自动同步状态；--force 清空并重新生成
 

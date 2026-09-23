@@ -185,7 +185,7 @@ copy config.example.json config.json
 | --- | --- | --- |
 | `timeout` | 否 | HTTP 超时秒数，默认 10 |
 | `cookie` | **是** | 浏览器登录后的 Cookie（含 `jwt=`，是唯一必须维护的登录凭证） |
-| `authorization` | 否 | ucontent JWT；**留空即可**，程序会自动用 cookie 中的 `jwt=` 代替（推荐只维护 cookie） |
+| `authorization` | 否 | ucontent JWT；**留空即可**，程序会自动用 cookie 中的 `jwt=` 代替 |
 | `x_annotator_auth_token` | **是** | 批注鉴权 token |
 | `u_school` | **是** | 学校编号 |
 | `course_id` | **是** | 课程 id，如 `course-v2:...` |
@@ -264,7 +264,7 @@ copy config.example.json config.json
 | `debug <groupId> [--force]` | 本地求解指定任务组（不提交，用于调试；讨论题显示完整草稿与讨论区状态，单词卡显示词表）；已通过任务默认只做解析预览（不调用 LLM），`--force` 强制生成 |
 | `test-types` | 每种题型抽一题测试答题链路（不提交） |
 | `transcribe <url>` | 测试媒体转写链路（下载 → ffmpeg → whisper） |
-| `dump-text [--names] [--force] [unitId...]` | 打印全部题目文本与媒体转写（不答题）；输出到 `dump_text/{单元序号}_{unitId}/{题型}/{groupId}.txt`，文件首行含必修/完成状态（每次刷新，`run`/`group` 完成后自动同步），汇总见 `_summary.txt`；`text`/`video` 叶子仅导出含讨论题（discussion）或单词卡（vocabulary）的任务组 |
+| `dump-text [--names] [--force] [unitId...]` | 打印全部题目文本与媒体转写（不答题）；输出到 `dump_text/{单元序号}_{unitId}/{题型}/{groupId}.txt`，所有叶子全量导出、浏览类页面归入 `view-only/`；文件首行含必修/完成状态（每次刷新，`run`/`group` 完成后自动同步），汇总见 `_summary.txt` |
 
 #### 参数说明
 
@@ -278,10 +278,10 @@ copy config.example.json config.json
 ### 转写与文本导出
 
 - `transcribe <url>` 可对任意媒体 URL 单独验证转写链路，结果按 URL 缓存。
-- `dump-text` 遍历全课程（或指定单元），按 `dump_text/{单元序号}_{unitId}/{题型}/{groupId}.txt` 归档：`task` 叶子全量导出；`text`/`video` 叶子只导出含讨论题（discussion）或单词卡（vocabulary）的任务组；题型目录取 `reply_type`（空则回退 `module_type`）。
+- `dump-text` 遍历全课程（或指定单元），按 `dump_text/{单元序号}_{unitId}/{题型}/{groupId}.txt` 归档：**所有叶子全量导出**；题型目录取 `reply_type`（空则回退 `module_type`）；内容为空/非 JSON/无题目模块的**浏览类页面**归入 `{单元}/view-only/`（记录状态与说明，附原始内容如有）。
   - 每个文件**首行含必修/完成状态**（如 `... (task) | 必修 | 未完成 ====`）：已存在的文件每次运行只刷新状态、不重新抓题（旧版扁平结构升级后建议先执行一次 `--force`）；缺失的才抓取生成（含媒体转写）。
-  - `run`/`group` 答题提交成功后，会自动把对应文件首行更新为"已完成"。
-  - `dump_text/_summary.txt` 为状态汇总（更新时间、必修/选修完成统计、按单元统计、带状态的文件清单），每次 dump 或答题完成后自动刷新。
+  - `run`/`group` 答题提交成功后，会自动把对应文件首行更新为"已完成"；浏览类页面（task 叶子）在作答时也会直接走"标记已看"提交。
+  - `dump_text/_summary.txt` 为状态汇总（更新时间、必修/选修完成统计、按单元统计、带状态的文件清单），覆盖全部任务，每次 dump 或答题完成后自动刷新。
 
 ## 测试
 
@@ -290,7 +290,12 @@ cargo test
 ```
 
 覆盖内容解密（ZeroPadding）、多选/单选答案解析、编号填空拆分、LLM 地址归一化、VTT 字幕解析、媒体 URL 提取等。
-
+## 建议使用步骤
+1. 先使用dump-text 生成所有题目的转写
+2. 再使用group命令对每种题型的任务组进行测试，或者用test-types，可以把输出结果给AI分析
+3. 如果全部测试通过，则可以使用run命令一键刷完
+4. 如果某种题型的分数很低（注意部分题型本来就没有分），且环境均配置好（尤其是ffmpeg和whisper没有配置好会导致程序无法回答包含视频，音频的题目），则可能是程序bug，请向作者报告
+5. 如何报告bug：使用debug命令运行一次存在问题的任务组，附上程序输出，并写上错误描述，题目类型，在issue中提出
 ## 更新日志
 ### 26/8/10
 - 增加了--names参数,修复了banked_cloze类题目的逻辑
@@ -309,7 +314,10 @@ cargo test
 - `run`/`group` 自动处理讨论题，`debug` 显示完整草稿与讨论区状态，`dump-text` 支持导出含讨论题的 text/video 组；
 - 新增单词卡（vocabulary）支持：无需作答，自动标记完成（实测提交即可 pass），`debug`/`dump-text` 可查看词表；
 - `dump-text` 输出改为按单元/题型分目录(`dump_text/{单元序号}_{unitId}/{题型}/{groupId}.txt`)， dump 文件首行增加必修/完成状态，`_summary.txt` 改为状态汇总；`run`/`group` 答题完成后自动同步完成状态；
-- `group`/`debug` 支持 `--force`：已通过任务默认跳过作答（`group` 不调用 LLM 不提交、`debug` 只做解析预览），加 `--force` 可强制重做/生成
+- `group`/`debug` 支持 `--force`：已通过任务默认跳过作答（`group` 不调用 LLM 不提交、`debug` 只做解析预览），加 `--force` 可强制重做/生成；
+- `dump-text` 全量归档所有叶子（含阅读/视频/浏览类页面，浏览类归入 `{单元}/view-only/`），状态跟踪覆盖全部任务；浏览类 task 叶子自动走"标记已看"提交，`debug` 对其友好提示不再报错
+- 新增了对无题目类任务的支持例如[Quotation,纯视频页面,长文阅读页面]，程序直接向服务器发送完成标志（经测试已通过）
+> 本条在v3.3版本的release还未应用
 
 
 ## 许可证
