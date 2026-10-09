@@ -8,15 +8,26 @@ use crate::api::session::Session;
 use crate::api::submit::{
     RateLimited, build_answer_payload, build_mark_seen_payload, empty_answers, submit_raw,
 };
+use crate::reporter::{ReportEvent, Reporter};
 use anyhow::{Result, bail};
-use log::{error, info};
+use log::info;
+use tokio_util::sync::CancellationToken;
 
 /// 提交并处理限频：命中限频则等待冷却后重试（仅重做提交，不重复 LLM 作答）。
-async fn submit_with_rate_retry(session: &Session, payload: &str) -> Result<serde_json::Value> {
+/// 等待期间可被 cancel 中断。
+async fn submit_with_rate_retry(
+    session: &Session,
+    payload: &str,
+    reporter: &dyn Reporter,
+    cancel: &CancellationToken,
+) -> Result<serde_json::Value> {
     const MAX_RETRIES: u32 = 5;
     const COOLDOWN_SECS: u64 = 180;
     let mut attempt = 0u32;
     loop {
+        if cancel.is_cancelled() {
+            bail!("已取消");
+        }
         match submit_raw(session, payload).await {
             Ok(v) => return Ok(v),
             Err(e) => {
@@ -28,29 +39,50 @@ async fn submit_with_rate_retry(session: &Session, payload: &str) -> Result<serd
                     return Err(e);
                 }
                 let secs = COOLDOWN_SECS * (attempt as u64);
-                log::warn!(
-                    "触发限频，等待 {} 秒后重试 ({}/{}): {}",
-                    secs,
+                reporter.report(ReportEvent::RateLimited {
                     attempt,
-                    MAX_RETRIES,
-                    e
-                );
-                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                    max: MAX_RETRIES,
+                    wait_secs: secs,
+                    message: e.to_string(),
+                });
+                tokio::select! {
+                    _ = cancel.cancelled() => bail!("已取消"),
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(secs)) => {}
+                }
             }
         }
     }
 }
 
-pub async fn process_group(session: &Session, task: &GroupTask) -> Result<serde_json::Value> {
-    let resp = process_group_inner(session, task).await?;
+pub async fn process_group(
+    session: &Session,
+    task: &GroupTask,
+    reporter: &dyn Reporter,
+    cancel: &CancellationToken,
+) -> Result<serde_json::Value> {
+    reporter.report(ReportEvent::TaskStart {
+        group_id: task.group_id.clone(),
+        tab_type: task.tab_type.clone(),
+    });
+    let resp = process_group_inner(session, task, reporter, cancel).await?;
     // 答题成功后同步 dump 文件首行状态（无 dump 文件则忽略）
     if crate::dump::sync_task_status(task, true) {
         log::debug!("dump 状态已更新: {} -> 已完成", task.group_id);
     }
+    reporter.report(ReportEvent::TaskDone {
+        group_id: task.group_id.clone(),
+        tab_type: task.tab_type.clone(),
+        detail: resp.to_string(),
+    });
     Ok(resp)
 }
 
-async fn process_group_inner(session: &Session, task: &GroupTask) -> Result<serde_json::Value> {
+async fn process_group_inner(
+    session: &Session,
+    task: &GroupTask,
+    reporter: &dyn Reporter,
+    cancel: &CancellationToken,
+) -> Result<serde_json::Value> {
     match task.tab_type.as_str() {
         "text" | "video" => {
             // 讨论题可能挂在 text/video 叶子下：尝试解析内容，检测到 discussion 则先发帖。
@@ -60,7 +92,7 @@ async fn process_group_inner(session: &Session, task: &GroupTask) -> Result<serd
                 post_discussion_comments(session, &task.group_id, &group).await?;
             }
             let payload = build_mark_seen_payload(session, &task.group_id)?;
-            submit_with_rate_retry(session, &payload).await
+            submit_with_rate_retry(session, &payload, reporter, cancel).await
         }
         "task" => {
             let rt = fetch_content(session, &task.group_id).await?;
@@ -77,7 +109,7 @@ async fn process_group_inner(session: &Session, task: &GroupTask) -> Result<serd
                         task.group_id
                     );
                     let payload = build_mark_seen_payload(session, &task.group_id)?;
-                    return submit_with_rate_retry(session, &payload).await;
+                    return submit_with_rate_retry(session, &payload, reporter, cancel).await;
                 }
             };
 
@@ -101,7 +133,7 @@ async fn process_group_inner(session: &Session, task: &GroupTask) -> Result<serd
             // 无可答模块（纯讨论/单词卡朗读/视频弹题等）：与浏览器一致，空 quesDatas + submitType=2 标记完成。
             if !has_answerable_module(&group) {
                 let payload = build_mark_seen_payload(session, &task.group_id)?;
-                return submit_with_rate_retry(session, &payload).await;
+                return submit_with_rate_retry(session, &payload, reporter, cancel).await;
             }
 
             // 混合组：剔除 discussion 模块后按普通答案提交。
@@ -114,7 +146,7 @@ async fn process_group_inner(session: &Session, task: &GroupTask) -> Result<serd
             modules.retain(|m| !discussion_ids.contains(m.instance_id.as_str()));
 
             let payload = build_answer_payload(session, &task.group_id, &modules)?;
-            submit_with_rate_retry(session, &payload).await
+            submit_with_rate_retry(session, &payload, reporter, cancel).await
         }
         other => bail!("未知 tab_type: {}", other),
     }
@@ -175,20 +207,27 @@ fn discussion_title(m: &Module) -> String {
     crate::api::parser::truncate_text(line, 60)
 }
 
-pub async fn run_course(session: &mut Session, with_names: bool) -> Result<RunSummary> {
+pub async fn run_course(
+    session: &mut Session,
+    with_names: bool,
+    reporter: &dyn Reporter,
+    cancel: &CancellationToken,
+) -> Result<RunSummary> {
     let course = fetch_course_progress(session).await?;
     let version = course.publish_version.clone();
     if !version.is_empty() {
         session.set_publish_version(&version)?;
     }
     let units = fetch_course_units(session).await?;
-    run_course_units(session, &units, with_names).await
+    run_course_units(session, &units, with_names, reporter, cancel).await
 }
 
 pub async fn run_course_units(
     session: &mut Session,
     unit_ids: &[String],
     with_names: bool,
+    reporter: &dyn Reporter,
+    cancel: &CancellationToken,
 ) -> Result<RunSummary> {
     let compulsory_only = session.cfg().compulsory_only();
     let mut summary = RunSummary::default();
@@ -198,50 +237,69 @@ pub async fn run_course_units(
             crate::api::course::course_display_name(session, session.course_id()).await
         );
     }
-    for (ui, unit_id) in unit_ids.iter().enumerate() {
+    'units: for (ui, unit_id) in unit_ids.iter().enumerate() {
+        if cancel.is_cancelled() {
+            break;
+        }
         let rt = fetch_unit(session, unit_id).await?;
         let tasks = select_tasks(&build_tasks(unit_id, &rt), compulsory_only);
-        if with_names {
-            let label = crate::api::course::unit_label(session, unit_id)
-                .await?
-                .unwrap_or_else(|| format!("Unit {}", ui + 1));
-            info!(
-                "单元 {} ({}) ：任务 {} 个{}",
-                unit_id,
-                label,
-                tasks.len(),
-                if compulsory_only { " (仅必修)" } else { "" }
-            );
+        let label = if with_names {
+            Some(
+                crate::api::course::unit_label(session, unit_id)
+                    .await?
+                    .unwrap_or_else(|| format!("Unit {}", ui + 1)),
+            )
         } else {
-            info!(
-                "单元 {} ：任务 {} 个{}",
-                unit_id,
-                tasks.len(),
-                if compulsory_only { " (仅必修)" } else { "" }
-            );
-        }
+            None
+        };
+        reporter.report(ReportEvent::UnitStart {
+            unit_id: unit_id.clone(),
+            label,
+            total: tasks.len(),
+            required_only: compulsory_only,
+        });
         for task in &tasks {
+            if cancel.is_cancelled() {
+                break 'units;
+            }
             if task.passed {
                 summary.skipped += 1;
                 // 跳过已通过任务时也同步 dump 状态（可能是旧状态未更新）
                 crate::dump::sync_task_status(task, true);
+                reporter.report(ReportEvent::TaskSkipped {
+                    group_id: task.group_id.clone(),
+                    reason: "已通过".to_string(),
+                });
                 continue;
             }
-            match process_group(session, task).await {
-                Ok(resp) => {
+            match process_group(session, task, reporter, cancel).await {
+                Ok(_) => {
                     summary.done += 1;
-                    info!("[OK] {} {} -> {}", task.tab_type, task.group_id, resp);
                 }
                 Err(e) => {
+                    if cancel.is_cancelled() {
+                        break 'units;
+                    }
                     summary.failed += 1;
-                    error!("[FAIL] {} {} -> {:#}", task.tab_type, task.group_id, e);
+                    reporter.report(ReportEvent::TaskFailed {
+                        group_id: task.group_id.clone(),
+                        tab_type: task.tab_type.clone(),
+                        error: format!("{:#}", e),
+                    });
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_millis(session.cfg().interval_ms)).await;
+            tokio::select! {
+                _ = cancel.cancelled() => break 'units,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(session.cfg().interval_ms)) => {}
+            }
         }
     }
-    // 全部处理完后刷新 dump 状态汇总
-    let _ = crate::dump::write_summary();
+    // 每个任务完成后已实时同步状态到数据库
+    reporter.report(ReportEvent::RunFinished {
+        done: summary.done,
+        skipped: summary.skipped,
+        failed: summary.failed,
+    });
     Ok(summary)
 }
 

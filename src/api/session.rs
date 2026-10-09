@@ -16,12 +16,7 @@ pub struct Session {
 
 impl Session {
     pub fn new(cfg: Config, config_path: PathBuf) -> Result<Self> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(cfg.timeout.max(3)))
-            .user_agent(default_ua())
-            .default_headers(build_base_headers(&cfg))
-            .build()
-            .context("构建 HTTP 客户端失败")?;
+        let client = build_client(&cfg)?;
         Ok(Self {
             client,
             cfg,
@@ -31,6 +26,19 @@ impl Session {
 
     pub fn cfg(&self) -> &Config {
         &self.cfg
+    }
+
+    pub fn config_path(&self) -> &PathBuf {
+        &self.config_path
+    }
+
+    /// 替换配置：写入 config.json 并重建 HTTP 客户端（默认头依赖配置）。
+    pub fn update_config(&mut self, cfg: Config) -> Result<()> {
+        let client = build_client(&cfg)?;
+        cfg.save(&self.config_path)?;
+        self.client = client;
+        self.cfg = cfg;
+        Ok(())
     }
 
     /// 运行时覆盖提交间隔（毫秒），不写回 config.json。
@@ -153,6 +161,15 @@ fn check_code(v: &Value) -> Result<()> {
         anyhow::bail!("接口返回错误 code={} msg={}", code.unwrap(), msg);
     }
     Ok(())
+}
+
+fn build_client(cfg: &Config) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(cfg.timeout.max(3)))
+        .user_agent(default_ua())
+        .default_headers(build_base_headers(cfg))
+        .build()
+        .context("构建 HTTP 客户端失败")
 }
 
 fn build_base_headers(cfg: &Config) -> reqwest::header::HeaderMap {

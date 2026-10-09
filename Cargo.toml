@@ -22,3 +22,8 @@ whisper-candle-core = "0.1"
 hf-hub = "0.4"
 candle-core = "0.9"
 ureq = "2"
+ratatui = "0.30"
+crossterm = "0.29"
+tokio-util = { version = "0.7", features = ["rt"] }
+time = { version = "0.3", features = ["local-offset", "formatting", "macros"] }
+rusqlite = { version = "0.40", features = ["bundled"] }

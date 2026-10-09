@@ -302,8 +302,7 @@ pub fn course_display_name_fallback(course_id: &str) -> String {
     }
     match kind {
         "rw" => name.push_str("读写教程"),
-        "ls" => name.push_str("视听说教程"),
-        "ur" => name.push_str("视听说教程"),
+        "vls" => name.push_str("视听说教程"),
         _ => name.push_str(&format!("未知课程({})", kind)),
     };
     if book.is_empty() {

@@ -1,21 +1,81 @@
 use UnipusAI::api::session::Session;
 use UnipusAI::config::Config;
 use anyhow::{Context, Result};
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+/// env_logger 输出分流：同时写 stderr 与本次运行日志文件。
+struct TeeWriter {
+    log: Arc<UnipusAI::logging::RunLog>,
+}
+
+impl std::io::Write for TeeWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let _ = std::io::stderr().write_all(buf);
+        self.log.write_bytes(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = std::io::stderr().flush();
+        self.log.flush();
+        Ok(())
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .format_timestamp_secs()
-        .init();
-
+    let args: Vec<String> = std::env::args().collect();
+    let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("");
     let config_path = PathBuf::from("config.json");
+
+    // 初始化运行日志（logs/ 每次运行新建文件，自动清理 3 天前）
+    let run_log: Option<Arc<UnipusAI::logging::RunLog>> = match UnipusAI::logging::prepare() {
+        Ok(l) => Some(Arc::new(l)),
+        Err(e) => {
+            eprintln!("警告: 初始化日志文件失败，仅输出到控制台: {:#}", e);
+            None
+        }
+    };
+
+    // 无参数 / --tui：交互式界面
+    if args.len() <= 1 || cmd == "--tui" || cmd == "tui" {
+        let cfg = Config::load(&config_path)?;
+        let session = Session::new(cfg, config_path)?;
+        return UnipusAI::tui::run_tui(session, run_log).await;
+    }
+
+    match &run_log {
+        Some(log) => {
+            let tee = TeeWriter { log: log.clone() };
+            env_logger::builder()
+                .filter_level(log::LevelFilter::Info)
+                .target(env_logger::Target::Pipe(Box::new(tee)))
+                .format(|buf, record| {
+                    let (t, _) = UnipusAI::logging::now();
+                    writeln!(
+                        buf,
+                        "[{} {} {}] {}",
+                        UnipusAI::logging::stamp_human(t),
+                        record.level(),
+                        record.target(),
+                        record.args()
+                    )
+                })
+                .init();
+            log::info!("日志文件: {}", log.path.display());
+        }
+        None => {
+            env_logger::builder()
+                .filter_level(log::LevelFilter::Info)
+                .format_timestamp_secs()
+                .init();
+        }
+    }
+
     let cfg = Config::load(&config_path)?;
     let session = Session::new(cfg.clone(), config_path.clone())?;
-
-    let args: Vec<String> = std::env::args().collect();
-    let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("help");
 
     match cmd {
         "progress" => cmd_progress(&session, &args[2..]).await?,
@@ -119,270 +179,32 @@ async fn cmd_test_types(session: &Session) -> Result<()> {
     Ok(())
 }
 
-/// 打印全部题目文本与媒体转写结果（不答题、不提交）。
-/// 输出结构: dump_text/{单元序号}_{unitId}/{题型}/{groupId}.txt，汇总写入 dump_text/_summary.txt。
-/// 所有叶子全量导出；浏览类页面（内容为空/非 JSON/无题目模块）归档到 {单元}/view-only/。
-/// 文件首行含必修/完成状态：已存在的文件每次只刷新状态（不重新抓题），缺失的才抓取生成；
-/// `--force` 清空重生成（目录结构变更后建议先 --force）。
+/// dump-text CLI 入口（逻辑见 UnipusAI::dump_text，供 CLI 与 TUI 共用）。
 async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
-    use UnipusAI::api::content::{decrypt_content, fetch_content, parse_decrypted};
-    use UnipusAI::api::course::{fetch_course_units, fetch_unit};
-    use UnipusAI::api::parser::{parse_group, truncate_text};
-    use UnipusAI::dump::{self, DUMP_DIR};
-    use std::fs;
-
-    // `--force` 清空并重建输出目录，否则保留已有文件（已生成的刷新状态、缺失的抓取生成）；
-    // `--names` 额外打印课程名与单元名。
     let (force, rest) = split_flag(unit_ids, "--force");
     let (with_names, unit_ids) = split_flag(&rest, "--names");
-    if force && std::path::Path::new(DUMP_DIR).exists() {
-        fs::remove_dir_all(DUMP_DIR).ok();
-    }
-    fs::create_dir_all(DUMP_DIR)?;
-
-    if with_names {
-        println!(
-            "课程: {}",
-            UnipusAI::api::course::course_display_name(session, session.course_id()).await
-        );
-    }
-
-    // 指定单元时仍拉取全量列表以确定课程序号（失败则退化为参数顺序）
-    let all_units = if unit_ids.is_empty() {
-        fetch_course_units(session).await?
-    } else {
-        fetch_course_units(session).await.unwrap_or_default()
+    let opts = UnipusAI::dump_text::DumpOptions {
+        force,
+        with_names,
+        unit_ids,
+        group_ids: Vec::new(),
     };
-    let units = if unit_ids.is_empty() {
-        all_units.clone()
-    } else {
-        unit_ids.to_vec()
-    };
-
-    let mut n_group = 0usize;
-    let mut n_module = 0usize;
-    let mut n_question = 0usize;
-    let mut n_media = 0usize;
-    let mut n_media_chars = 0usize;
-    let mut n_skipped = 0usize;
-    let mut n_updated = 0usize;
-
-    for (ui, uid) in units.iter().enumerate() {
-        // 课程序号（目录名前缀），指定单元时也能与全量跑法保持一致
-        let unit_no = all_units
-            .iter()
-            .position(|u| u == uid)
-            .map(|i| i + 1)
-            .unwrap_or(ui + 1);
-        let unit_dir =
-            std::path::PathBuf::from(format!("{}/{:02}_{}", DUMP_DIR, unit_no, uid));
-        // 已有文件映射（gid -> 路径）：只刷新状态，避免重复抓题
-        let existing = if force {
-            std::collections::HashMap::new()
-        } else {
-            dump::scan_unit_files(&unit_dir)
-        };
-        let rt = fetch_unit(session, uid).await?;
-        let mut unit_label: String = String::new();
-        let mut unit_header_printed = false;
-        for (gid, leaf) in &rt.leafs {
-            let header = dump::dump_header(
-                uid,
-                gid,
-                &leaf.tab_type,
-                leaf.strategies.required,
-                leaf.state.pass >= 1,
-            );
-
-            // 已存在：只刷新首行状态（状态未变不写盘），不重新抓题
-            if let Some(path) = existing.get(gid) {
-                n_skipped += 1;
-                if let Ok(content) = fs::read_to_string(path)
-                    && let Some(new) = dump::replace_first_line(&content, &header)
-                    && fs::write(path, new).is_ok()
-                {
-                    n_updated += 1;
-                }
-                continue;
-            }
-
-            let Ok(fc) = fetch_content(session, gid).await else {
-                continue;
-            };
-            let Ok(plain) = decrypt_content(&fc.content, &fc.k) else {
-                continue;
-            };
-            // 可解析出题目模块 → 正常归档；否则（空/非 JSON/无模块）为浏览类页面
-            let parsed = parse_decrypted(&plain)
-                .ok()
-                .and_then(|dec| parse_group(&dec).ok().map(|group| (dec, group)));
-
-            if with_names && !unit_header_printed {
-                if unit_label.is_empty()
-                    && let Some((dec, _)) = &parsed
-                {
-                    unit_label = UnipusAI::api::parser::extract_group_label(dec);
-                }
-                let label = if unit_label.is_empty() {
-                    format!("Unit {}", ui + 1)
-                } else {
-                    unit_label.clone()
-                };
-                println!("单元 {} ({})", uid, label);
-                unit_header_printed = true;
-            }
-
-            n_group += 1;
-            let mut lines: Vec<String> = Vec::new();
-            lines.push(header);
-
-            let Some((dec, group)) = parsed else {
-                // 浏览类页面（自定义/空内容）：记录状态行与说明，附原始内容（如有）
-                lines.push(String::new());
-                lines.push(
-                    "【浏览类页面】内容为空或无法解析为题目模块（自定义页面），run/group 将直接标记已看。"
-                        .to_string(),
-                );
-                let trimmed = plain.trim();
-                if !trimmed.is_empty() {
-                    lines.push(format!(
-                        "【原始内容】({}字)\n{}",
-                        plain.chars().count(),
-                        truncate_text(trimmed, 2000)
-                    ));
-                }
-                let dir = unit_dir.join(dump::VIEW_ONLY_DIR);
-                let path = dir.join(format!("{}.txt", gid));
-                fs::create_dir_all(&dir)?;
-                fs::write(&path, lines.join("\n"))?;
-                println!("任务组 {} -> {} (浏览类页面)", gid, path.display());
-                continue;
-            };
-
-            let vocab = UnipusAI::api::parser::extract_vocabulary(&dec);
-            for m in &group.modules {
-                n_module += 1;
-                n_question += m.children.len();
-                lines.push(String::new());
-                lines.push(format!(
-                    "[模块] type={} reply_type={} instance_id={}",
-                    m.module_type, m.reply_type, m.instance_id
-                ));
-                if m.module_type == "vocabulary" {
-                    lines.push(format!(
-                        "【单词卡】共 {} 个单词（朗读练习，提交时标记已看）",
-                        vocab.len()
-                    ));
-                    for w in &vocab {
-                        lines.push(format!(
-                            "  {} | {}",
-                            w.name,
-                            if w.sound.is_empty() { "-" } else { w.sound.as_str() }
-                        ));
-                    }
-                }
-                if !m.direction.is_empty() {
-                    lines.push(format!("【答题说明】\n{}", m.direction));
-                }
-                if !m.material.is_empty() {
-                    lines.push(format!(
-                        "【材料文本】({}字)\n{}",
-                        m.material.chars().count(),
-                        m.material
-                    ));
-                }
-                if !m.transcript.is_empty() {
-                    lines.push(format!(
-                        "【内嵌字幕】({}字)\n{}",
-                        m.transcript.chars().count(),
-                        m.transcript
-                    ));
-                }
-                for url in &m.media_sources {
-                    n_media += 1;
-                    match UnipusAI::transcribe::transcribe_media(session, url).await {
-                        Ok(t) => {
-                            n_media_chars += t.chars().count();
-                            lines.push(format!(
-                                "【媒体转写】(来源 {})\n{}",
-                                url,
-                                truncate_text(&t, 5000)
-                            ));
-                        }
-                        Err(e) => {
-                            lines.push(format!("【媒体转写失败】(来源 {})\n{:#}", url, e));
-                        }
-                    }
-                }
-                for (ci, c) in m.children.iter().enumerate() {
-                    let mut buf = format!("  [{:>2}] {} ", ci + 1, c.reply_type);
-                    if !c.question_text.is_empty() {
-                        buf.push_str(&format!("| 题干: {}", truncate_text(&c.question_text, 300)));
-                    }
-                    if !c.options.is_empty() {
-                        let opts: Vec<String> = c
-                            .options
-                            .iter()
-                            .map(|o| {
-                                let label = if o.name.is_empty() {
-                                    o.value.clone()
-                                } else {
-                                    o.name.clone()
-                                };
-                                let txt = if o.text.is_empty() {
-                                    o.value.clone()
-                                } else {
-                                    o.text.clone()
-                                };
-                                format!("{}: {}", label, truncate_text(&txt, 100))
-                            })
-                            .collect();
-                        buf.push_str(&format!(" | 选项: {}", opts.join(" ; ")));
-                    }
-                    lines.push(buf);
-                }
-            }
-
-            let type_dir = unit_dir.join(dump::group_type_name(&group));
-            let path = type_dir.join(format!("{}.txt", gid));
-            fs::create_dir_all(&type_dir)?;
-            fs::write(&path, lines.join("\n"))?;
-            println!(
-                "任务组 {} -> {} (模块{} 题{} 媒体{})",
-                gid,
-                path.display(),
-                group.modules.len(),
-                UnipusAI::api::parser::question_count(&group),
-                m_media_count(&group)
-            );
-        }
-    }
-
-    // 生成状态报告（扫描全部文件首行，含必修/完成情况）
-    let total = dump::write_summary()?;
+    let reporter = UnipusAI::reporter::PrintReporter;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let s = UnipusAI::dump_text::run_dump_text(session, &opts, &reporter, &cancel).await?;
     println!(
-        "dump-text 完成: 单元 {} 个, 新生成 {} 个, 已存在 {} 个(其中刷新状态 {} 个), 目录累计文件 {} 个",
-        units.len(),
-        n_group,
-        n_skipped,
-        n_updated,
-        total
+        "dump-text 完成: 单元 {} 个, 新生成 {} 个, 已存在 {} 个(其中刷新状态 {} 个), 库内累计任务组 {} 个",
+        s.units, s.generated, s.skipped, s.updated, s.total_files
     );
     println!(
         "本次新生成: 模块 {} 个, 题目 {} 道, 媒体转写 {} 条, 共 {} 字符",
-        n_module, n_question, n_media, n_media_chars
+        s.modules, s.questions, s.media, s.media_chars
     );
-    println!("状态汇总已写入 {}/_summary.txt", DUMP_DIR);
+    println!("数据已保存到 {}", UnipusAI::dump::db_path().display());
     Ok(())
 }
 
-fn m_media_count(group: &UnipusAI::api::parser::ParsedGroup) -> usize {
-    group.modules.iter().map(|m| m.media_sources.len()).sum()
-}
-
 async fn cmd_debug(session: &Session, args: &[String]) -> Result<()> {
-    use UnipusAI::api::content::{decrypt_content, fetch_content, parse_decrypted};
-    use UnipusAI::api::parser::parse_group;
     let (force, rest) = split_flag(args, "--force");
     let group_id = rest.first().map(|s| s.as_str()).unwrap_or_default();
     if group_id.is_empty() {
@@ -400,37 +222,25 @@ async fn cmd_debug(session: &Session, args: &[String]) -> Result<()> {
     if passed {
         println!("[已完成] 跳过 LLM 作答预览（--force 可强制生成）");
     }
-    let rt = fetch_content(session, group_id).await?;
-    let plain = decrypt_content(&rt.content, &rt.k)?;
-    let dec = match parse_decrypted(&plain) {
-        Ok(dec) => dec,
-        Err(_) => {
-            println!("[浏览类页面] 内容为空/非 JSON，无题目数据；run/group 将直接标记已看");
-            let trimmed = plain.trim();
-            if !trimmed.is_empty() {
-                println!(
-                    "【原始内容】({}字)\n{}",
-                    plain.chars().count(),
-                    UnipusAI::api::parser::truncate_text(trimmed, 2000)
-                );
-            }
-            return Ok(());
-        }
-    };
-    println!("=== 解密后完整 JSON ===");
-    println!("{}", serde_json::to_string_pretty(&dec)?);
-    let group = match parse_group(&dec) {
-        Ok(group) => group,
-        Err(e) => {
+    let preview = UnipusAI::preview::load_preview(session, group_id).await?;
+    if let Some(pretty) = &preview.json_pretty {
+        println!("=== 解密后完整 JSON ===");
+        println!("{}", pretty);
+    }
+    let Some(group) = &preview.group else {
+        println!("[浏览类页面] 内容为空/非 JSON/无题目模块，无题目数据；run/group 将直接标记已看");
+        let trimmed = preview.plain.trim();
+        if !trimmed.is_empty() {
             println!(
-                "[浏览类页面] 内容无法解析为题目模块（{:#}），run/group 将直接标记已看",
-                e
+                "【原始内容】({}字)\n{}",
+                preview.plain.chars().count(),
+                UnipusAI::api::parser::truncate_text(trimmed, 2000)
             );
-            return Ok(());
         }
+        return Ok(());
     };
     let has_discussion = group.modules.iter().any(|m| m.reply_type == "discussion");
-    let vocab = UnipusAI::api::parser::extract_vocabulary(&dec);
+    let vocab = &preview.vocab;
     for m in &group.modules {
         println!(
             "[module {}] reply_type={} children={} material_len={} word_bank={}",
@@ -525,18 +335,12 @@ async fn cmd_group(session: &Session, args: &[String]) -> Result<()> {
             group_id
         );
         UnipusAI::dump::sync_task_status(&task, true);
-        if let Err(e) = UnipusAI::dump::write_summary() {
-            log::warn!("刷新 dump 状态汇总失败: {:#}", e);
-        }
         return Ok(());
     }
-    match UnipusAI::core::runner::process_group(session, &task).await {
-        Ok(resp) => {
-            println!("[OK] {} -> {}", task.tab_type, resp);
-            if let Err(e) = UnipusAI::dump::write_summary() {
-                log::warn!("刷新 dump 状态汇总失败: {:#}", e);
-            }
-        }
+    let reporter = UnipusAI::reporter::PrintReporter;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    match UnipusAI::core::runner::process_group(session, &task, &reporter, &cancel).await {
+        Ok(_) => {}
         Err(e) => println!("[FAIL] {} -> {:#}", task.tab_type, e),
     }
     Ok(())
@@ -659,10 +463,19 @@ async fn cmd_run(mut session: Session, args: &[String]) -> Result<()> {
     } else {
         println!("提交间隔使用默认 {}ms", session.cfg().interval_ms);
     }
+    let reporter = UnipusAI::reporter::PrintReporter;
+    let cancel = tokio_util::sync::CancellationToken::new();
     let summary = if unit_ids.is_empty() {
-        UnipusAI::core::runner::run_course(&mut session, with_names).await?
+        UnipusAI::core::runner::run_course(&mut session, with_names, &reporter, &cancel).await?
     } else {
-        UnipusAI::core::runner::run_course_units(&mut session, &unit_ids, with_names).await?
+        UnipusAI::core::runner::run_course_units(
+            &mut session,
+            &unit_ids,
+            with_names,
+            &reporter,
+            &cancel,
+        )
+        .await?
     };
     println!(
         "完成: done={} skipped={} failed={}",
@@ -676,7 +489,8 @@ fn print_help() {
         r#"UnipusAI - U校园 AI 版刷课脚本
 
 用法:
-  UnipusAI <命令> [参数]
+  UnipusAI                    启动交互式 TUI（推荐；任务/预览来自 dump_text/dump.db，含课程浏览/运行/导出/设置；p 预览、D 导出）
+  UnipusAI <命令> [参数]      命令行模式（见下方命令）
 
 命令:
   progress [--names]
@@ -700,10 +514,10 @@ fn print_help() {
       测试媒体转写链路（下载 -> ffmpeg -> whisper）
 
   dump-text [--names] [--force] [unitId...]
-      导出题目文本与媒体转写到 dump_text/{{单元序号}}_{{unitId}}/{{题型}}/{{groupId}}.txt（不答题）
-      所有叶子全量导出；浏览类页面（内容为空/非 JSON/无题目模块）归入 {{单元}}/view-only/
-      文件首行含“必修/完成”状态，每次运行刷新；_summary.txt 为状态汇总
-      run/group 答题完成后同样会自动同步状态；--force 清空并重新生成
+      导出题目文本与媒体转写到 SQLite 数据库 dump_text/dump.db（不答题）
+      保存单元索引/题型/必修/完成情况/模块/答题说明/材料文本/媒体转写/选项等全部内容
+      所有叶子全量导出；浏览类页面（内容为空/非 JSON/无题目模块）按 view-only 保存原始内容
+      run/group 答题完成后自动同步状态；--force 清空数据库并重新生成
 
 参数:
   --names       显示课程名与单元名（如 新视野大学英语(第四版)读写教程 / U1 Pre-reading activities），

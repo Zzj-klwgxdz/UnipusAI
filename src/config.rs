@@ -42,7 +42,7 @@ pub struct Config {
     pub fallback_on_llm_failure: bool,
     #[serde(default = "default_interval_ms")]
     pub interval_ms: u64,
-    /// 是否启用本地语音(视频/音频)转写，默认关闭。
+    /// 是否启用本地语音(视频/音频)转写。
     #[serde(default)]
     pub whisper_enabled: bool,
     /// 转写用的 whisper 模型，如 tiny/base/small。
