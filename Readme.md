@@ -1,8 +1,8 @@
 # UnipusAI —— U校园 AI 版刷课脚本
 
 本项目是原 Python + Selenium 版（v2.4）的 **Rust 完全重写版**：
+不需要浏览器、不需要 WebDriver，原生 HTTP 实现，更轻量、更快、更稳定
 > 原 Python 版本（`Unipus_v2.4.py`、`AudioRecognizer.py`、`EnvironmentChecker.py` 等）已归档到v2.4分支。
-不需要浏览器、不需要 WebDriver，纯命令行 + 原生 HTTP 实现，更轻量、更快、更稳定
 ### 如想用浏览器自动化方案请看[v2.4分支（bug较多）](https://github.com/Zzj-klwgxdz/UnipusAI/tree/v2.4)或者[这个（更推荐）](https://github.com/YSJohnson/UnipusAI-Helper),这个项目继承了原python版本的主要功能，并优化了用户体验
 ### 该项目在测试阶段，可能存在诸多问题，欢迎各位到issue留言
 ### 因为程序可能对部分题型没有适配完全，所以可能部分题目程序作答提交的成绩为0。请勿无脑使用一键刷题命令，由此导致的一切后果请自行承担
@@ -22,6 +22,8 @@
 - **SQLite 数据归档**：`dump-text` 把课程全部内容存入 `dump_text/dump.db`（单元索引/题型/必修/完成情况/模块/答题说明/材料/字幕/媒体转写/选项等），dump 或 run/group 答题后自动更新状态。
 
 ## 示例图片
+![tui](./imgs/tui.png)
+*tui*
 ![dumping](./imgs/dumping.png)
 *dump-text*
 ![running](./imgs/running.png)
