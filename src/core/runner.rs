@@ -319,9 +319,9 @@ pub async fn mock_task(session: &Session, group_id: &str) -> Result<GroupTask> {
                     },
                     required: leaf.strategies.required,
                     passed: leaf.state.pass >= 1,
-                    min_score_pct: leaf.strategies.min_score_pct,
-                    start_time: leaf.strategies.start_time,
-                    end_time: leaf.strategies.end_time,
+                    min_score_pct: leaf.strategies.min_score_pct.unwrap_or(0),
+                    start_time: leaf.strategies.start_time.unwrap_or(0),
+                    end_time: leaf.strategies.end_time.unwrap_or(0),
                 });
             }
         }

@@ -1,8 +1,18 @@
 use crate::api::session::{Session, progress_url, unit_progress_url};
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
+
+/// 反序列化兜底：字段缺失或显式 `null` 时使用类型默认值。
+/// （`#[serde(default)]` 只处理缺失，不处理服务端返回的显式 null）
+fn null_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CourseProgressResponse {
@@ -13,7 +23,7 @@ pub struct CourseProgressResponse {
 pub struct CourseProgressRt {
     #[serde(default)]
     pub units: BTreeMap<String, CourseUnitEntry>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub publish_version: String,
 }
 
@@ -29,28 +39,27 @@ pub struct ProgressResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProgressRt {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub duration_time: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub flag: String,
     #[serde(default)]
     pub leafs: BTreeMap<String, LeafEntry>,
     #[serde(default)]
     pub micros: BTreeMap<String, MicroEntry>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub open_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub publish_version: String,
-    #[serde(default)]
-    #[serde(rename = "tutorialId")]
+    #[serde(default, rename = "tutorialId", deserialize_with = "null_default")]
     pub tutorial_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub unit_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct LeafEntry {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub duration: i64,
     pub state: LeafState,
     pub strategies: Strategies,
@@ -60,22 +69,25 @@ pub struct LeafEntry {
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct LeafState {
+    #[serde(default, deserialize_with = "null_default")]
     pub pass: u8,
+    #[serde(default, deserialize_with = "null_default")]
     pub pass2: u8,
+    #[serde(default, deserialize_with = "null_default")]
     pub perm: u8,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Strategies {
     #[serde(default)]
-    pub end_time: i64,
+    pub end_time: Option<i64>,
     #[serde(default)]
-    pub min_score_pct: i32,
-    #[serde(default)]
+    pub min_score_pct: Option<i32>,
+    #[serde(default, deserialize_with = "null_default")]
     pub required: bool,
     #[serde(default)]
-    pub start_time: i64,
-    #[serde(default)]
+    pub start_time: Option<i64>,
+    #[serde(default, deserialize_with = "null_default")]
     pub statistic_mode_out: bool,
 }
 
@@ -125,9 +137,9 @@ pub fn build_tasks(unit_id: &str, rt: &ProgressRt) -> Vec<GroupTask> {
             tab_type: leaf.tab_type.clone(),
             required: leaf.strategies.required,
             passed: leaf.state.pass >= 1,
-            min_score_pct: leaf.strategies.min_score_pct,
-            start_time: leaf.strategies.start_time,
-            end_time: leaf.strategies.end_time,
+            min_score_pct: leaf.strategies.min_score_pct.unwrap_or(0),
+            start_time: leaf.strategies.start_time.unwrap_or(0),
+            end_time: leaf.strategies.end_time.unwrap_or(0),
         });
     }
     tasks.sort_by(|a, b| a.group_id.cmp(&b.group_id));
@@ -552,6 +564,68 @@ mod tests {
             course_display_name_fallback("course-v2:x+yz_3+9"),
             "未知书本(yz)未知版本()未知课程() 3"
         );
+    }
+
+    #[test]
+    fn progress_tolerates_null_and_missing_fields() {
+        // 复现 bug1：服务端对未发布任务返回 strategies.start_time/end_time = null
+        let v = serde_json::json!({
+            "rt": {
+                "duration_time": null,
+                "flag": null,
+                "open_id": null,
+                "publish_version": "139753",
+                "tutorialId": null,
+                "leafs": {
+                    "g-null": {
+                        "duration": null,
+                        "state": {"pass": null, "pass2": 0, "perm": null},
+                        "strategies": {"end_time": null, "min_score_pct": null, "required": null, "start_time": null, "statistic_mode_out": null},
+                        "tab_type": "task"
+                    },
+                    "g-missing": {
+                        "state": {},
+                        "strategies": {},
+                        "tab_type": "text"
+                    },
+                    "g-normal": {
+                        "state": {"pass": 1, "pass2": 0, "perm": 1},
+                        "strategies": {"end_time": 1791647999, "min_score_pct": 60, "required": true, "start_time": 1788710400, "statistic_mode_out": false},
+                        "tab_type": "video",
+                        "duration": 120
+                    }
+                }
+            }
+        });
+        let resp: ProgressResponse =
+            serde_json::from_value(v).expect("null/缺失字段应可正常解析");
+        assert_eq!(resp.rt.duration_time, 0);
+        assert_eq!(resp.rt.publish_version, "139753");
+
+        let tasks = build_tasks("u1", &resp.rt);
+        let t_null = tasks.iter().find(|t| t.group_id == "g-null").unwrap();
+        assert_eq!(
+            (t_null.min_score_pct, t_null.start_time, t_null.end_time),
+            (0, 0, 0)
+        );
+        assert!(!t_null.required && !t_null.passed);
+        let t_missing = tasks.iter().find(|t| t.group_id == "g-missing").unwrap();
+        assert_eq!(
+            (t_missing.min_score_pct, t_missing.start_time, t_missing.end_time),
+            (0, 0, 0)
+        );
+        let t_norm = tasks.iter().find(|t| t.group_id == "g-normal").unwrap();
+        assert!(t_norm.required && t_norm.passed);
+        assert_eq!(
+            (t_norm.min_score_pct, t_norm.start_time, t_norm.end_time),
+            (60, 1788710400, 1791647999)
+        );
+
+        // 课程级进度：publish_version 为 null 也可解析
+        let cv = serde_json::json!({"rt": {"units": {}, "publish_version": null}});
+        let c: CourseProgressResponse =
+            serde_json::from_value(cv).expect("null publish_version 应可解析");
+        assert!(c.rt.publish_version.is_empty());
     }
 
     #[test]
