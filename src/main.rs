@@ -1,9 +1,15 @@
 use UnipusAI::api::session::Session;
 use UnipusAI::config::Config;
 use anyhow::{Context, Result};
+use colored::Colorize;
+use crossterm::event::{self, Event, KeyEventKind};
+// use crossterm::style::Stylize;
+use crossterm::terminal;
+use figlet_rs::FIGlet;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+
 
 /// env_logger 输出分流：同时写 stderr 与本次运行日志文件。
 struct TeeWriter {
@@ -26,6 +32,7 @@ impl std::io::Write for TeeWriter {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    print_hello()?;
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("");
     let config_path = PathBuf::from("config.json");
@@ -41,6 +48,7 @@ async fn main() -> Result<()> {
 
     // 无参数 / --tui：交互式界面
     if args.len() <= 1 || cmd == "--tui" || cmd == "tui" {
+        wait_any_key()?;
         let cfg = Config::load(&config_path)?;
         let session = Session::new(cfg, config_path)?;
         return UnipusAI::tui::run_tui(session, run_log).await;
@@ -539,7 +547,36 @@ fn print_help() {
 "#
     );
 }
+fn print_hello() -> Result<()> {
+    let font = FIGlet::standard().map_err(|e| anyhow::anyhow!(e))?;
+    if let Some(title) = font.convert("UnipusAI") {
+        println!("{}", title.to_string().cyan());
+    }
+    println!("{}","UnipusAI_v3.4\n\t\t\t--by Zzj\nU校园AI版自动刷题脚本".truecolor(255, 153, 255).bold());
+    println!("本软件完全免费，并且在https://github.com/Zzj-klwgxdz/UnipusAI上开源，作者未授权给任何人售卖。如果你是通过购买获得的，请立刻退货，并向平台举报");
+    println!("{}","导狗死全家".red().bold());
+    Ok(())
+}
 
+/// 仅交互终端等待任意按键；忽略按键松开（Windows 下启动命令的 Enter 弹起事件会残留）。
+fn wait_any_key() -> Result<()> {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return Ok(());
+    }
+    println!("输入任意按键继续");
+    std::io::stdout().flush()?;
+    terminal::enable_raw_mode()?;
+    loop {
+        match event::read() {
+            Ok(Event::Key(k)) if k.kind != KeyEventKind::Release => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    terminal::disable_raw_mode()?;
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;

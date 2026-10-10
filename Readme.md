@@ -2,25 +2,25 @@
 
 本项目是原 Python + Selenium 版（v2.4）的 **Rust 完全重写版**：
 不需要浏览器、不需要 WebDriver，纯命令行 + 原生 HTTP 实现，更轻量、更快、更稳定
-### 原python项目bug较多，如想用浏览器自动化方案请看[这个](https://github.com/YSJohnson/UnipusAI-Helper),这个项目继承了原python版本的主要功能，并优化了用户体验
+### 如想用浏览器自动化方案请看[这个](https://github.com/YSJohnson/UnipusAI-Helper),这个项目继承了原python版本的主要功能，并优化了用户体验
 ### 该项目在测试阶段，可能存在诸多问题，欢迎各位到issue留言
-### 因为程序可能对部分题型没有适配完全，所以可能部分题目程序作答提交的成绩为0。请勿无脑使用`run`一键刷题命令，由此导致的一切后果请自行承担
-### 本人英语已免修，所以目前只能借用别人的账号调试，并且学业繁忙，更新频率下降
+### 因为程序可能对部分题型没有适配完全，所以可能部分题目程序作答提交的成绩为0。请勿无脑使用一键刷题命令，由此导致的一切后果请自行承担
+### 如果你是从视频平台过来的，如果不会使用尽量不要通过评论区或私信向我提问（大概率不回），请向ai（豆包，deepseek等）提问：“阅读这个项目https://github.com/Zzj-klwgxdz/UnipusAI，我应该如何使用。” 或者通过agent工具直接让它配置好
+
 > 原 Python 版本（`Unipus_v2.4.py`、`AudioRecognizer.py`、`EnvironmentChecker.py` 等）已删除。
 
 ## 主要功能
 
 - **运行日志**：每次运行在 `logs/` 生成独立日志文件（本地时间命名，如 `unipus-20261009-214732.log`），启动时自动清理 3 天前的旧日志；CLI 与 TUI 均记录。
+- **纯命令行工具**：提供 `progress` / `run` / `group` / `debug` / `test-types` / `transcribe` / `dump-text` 等命令，方便调试与验证。
 - **交互式 TUI**：直接运行 `UnipusAI`（无参数）进入终端界面：浏览课程/单元/任务、运行与取消、dump 总览与导出、配置编辑，支持鼠标（ratatui）；任务树与预览全部来自本地数据库，可离线浏览，支持单任务重抓。
 - **全自动刷课**：遍历课程全部单元/任务组，自动解析并作答提交，跳过已通过的章节。
-- **AI 答题**：接入任意 OpenAI 兼容接口（DeepSeek / Kimi 等），覆盖选择、填空、简答等常见题型。
+- **AI 答题**：接入任意 OpenAI 兼容接口，覆盖选择、填空、简答等常见题型。
 - **讨论题自动发言**：讨论区（discussion）题型自动生成英文发言并发布到讨论区，再标记任务完成。
 - **单词卡/朗读练习**：vocabulary 题型无需作答，自动标记完成；`debug`/`dump-text` 可查看单词表。
-- **限频自动重试**：提交命中服务端"操作过于频繁"时，自动等待冷却（递增 180s，最多 5 次）后重试，无需手动干预。
+- **限频自动重试**：提交命中服务端"操作过于频繁"时，自动等待冷却（递增 180s，最多 5 次）后重试。
 - **本地语音/视频转写**：对无内嵌字幕的音频/视频模块，用 ffmpeg + Whisper 本地转写后作答，不依赖在线语音识别服务。
-- **纯命令行工具**：提供 `progress` / `run` / `group` / `debug` / `test-types` / `transcribe` / `dump-text` 等命令，方便调试与验证。
-- **爬取课程的目录，题目文本和媒体转写**：`dump-text`工具可以爬取课程题目和媒体转写
-- **SQLite 数据归档**：`dump-text` 把课程全部内容存入 `dump_text/dump.db`（单元索引/题型/必修/完成情况/模块/答题说明/材料/字幕/媒体转写/选项等），dump 或 run/group 答题后自动更新状态
+- **SQLite 数据归档**：`dump-text` 把课程全部内容存入 `dump_text/dump.db`（单元索引/题型/必修/完成情况/模块/答题说明/材料/字幕/媒体转写/选项等），dump 或 run/group 答题后自动更新状态。
 
 ## 示例图片
 ![dumping](./imgs/dumping.png)
@@ -170,9 +170,17 @@ vtt/srt 字幕 → 直接下载并解析纯文本
 提交若命中服务端限频（响应 `code=600001/600002`，或 `msg` 含"操作过于频繁"），程序自动等待冷却（递增 180s，最多 5 次）后重试该次提交，仅重做提交、不重复 LLM 作答。
 
 ## 使用方法
+#### 对于小白，且平台为windows64位，直接下载release，配置好config.json后运行即可
+### 下载
+使用git克隆仓库
+```bash
+git clone https://github.com/Zzj-klwgxdz/UnipusAI.git
+cd UnipusAI
+```
+或者在github页面下载zip后解压
 ### 构建
 
-需要 Rust 工具链：
+需要安装 [Rust 工具链](https://rust-lang.org/zh-CN/tools/install/)
 
 ```bash
 cargo build --release
@@ -181,17 +189,26 @@ cargo build --release
 ### 依赖
 
 - **ffmpeg**：语音转写前置，需将ffmpeg的bin文件夹加入系统PATH，例如`C:\ffmpeg\bin`
-- **whisper 模型**：转写用模型（默认 `base`），首次转写时自动从 HuggingFace 下载并缓存到 `~/.cache/whisper-candle/`；可通过环境变量 `HF_ENDPOINT=https://hf-mirror.com` 使用国内镜像。
+- **whisper 模型**：转写用模型（默认 `base`），首次转写时**自动**从 HuggingFace 下载并缓存到 `~/.cache/whisper-candle/`；可通过在运行前设置环境变量使用国内镜像。
+#### 临时设置环境变量
+**powershell**
+```bash
+$env:HF_ENDPOINT = "https://hf-mirror.com"
+```
+**cmd**
+```bash
+set HF_ENDPOINT=https://hf-mirror.com
+```
+**bash**
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+```
 
 不配置这两者时程序仍可运行，但是带语音无字幕的题目会缺少材料。
-
+> 经测试Android平台也可以通过termux构建并运行本项目
 ### 配置
 
-仓库内不包含真实 `config.json`（含隐私凭证，已被 `.gitignore` 排除）。使用前先把模板复制为 `config.json` 再填入自己的信息：
-
-```powershell
-copy config.example.json config.json
-```
+仓库内不包含真实 `config.json`（含隐私凭证，已被 `.gitignore` 排除）。使用前先把模板复制为 `config.json` 再填入自己的信息
 
 编辑 `config.json`：
 
@@ -219,7 +236,7 @@ copy config.example.json config.json
 
 #### 各项配置如何获取
 
-以 Microsoft Edge（或 Chrome）为例：
+以 Microsoft Edge为例：
 
 1. 浏览器登录 U校园（`ucontent.unipus.cn`），进入任意课程。
 2. 按 `F12` 打开开发者工具 → `Network` 面板 → 勾选保留日志并刷新页面。
@@ -237,7 +254,7 @@ copy config.example.json config.json
 | `course_id` | 请求 URL 路径中的 `course-v2:...` 段（如 `/course/api/v2/course_progress/course-v2:xxx/`） |
 | `class_id` / `curricula_id` | 课程页面地址栏 URL 里的 `cid=...` 与 `cloudCurriculaId=...`（如 `pc.html?cid=1840...&cloudCurriculaId=369622`），仅讨论题需要 |
 | `publish_version` | `course_progress` 接口响应体 `rt.publish_version` 字段 |
-| `api_key` / `base_url` / `model` | 大模型厂商控制台申请（DeepSeek / Moonshot / Kimi 等），如 DeepSeek 平台生成 `sk-xxx`，`base_url=https://api.deepseek.com`，`model=deepseek-v4-flash` |
+| `api_key` / `base_url` / `model` | 大模型厂商控制台申请（如 DeepSeek 平台生成 `sk-xxx`，`base_url=https://api.deepseek.com`，`model=deepseek-flash` |
 | `learning_strategy` | 固定值二选一：`learn_all`（全部课程）或 `learn_all_compusory_course`（仅必修） |
 
 **说明：**
@@ -264,10 +281,10 @@ copy config.example.json config.json
 
 | 环境 | 命令 |
 | --- | --- |
-| 启动 TUI（推荐） | `UnipusAI`（无参数）或 `UnipusAI --tui` |
 | 源码目录（PowerShell / cmd） | `cargo run --release <命令> [参数]` 或 `cargo run --release`（TUI） |
 | exe 目录（PowerShell） | `.\UnipusAI.exe <命令> [参数]` |
 | exe 目录（cmd） | `UnipusAI <命令> [参数]` |
+| 直接双击运行 （TUI）|
 
 #### TUI 快捷键
 
@@ -284,7 +301,7 @@ copy config.example.json config.json
 | `r` / `q` / `Esc` | 刷新任务树（重读数据库） / 退出 / 运行中取消（再按返回上级） |
 | 鼠标 | 点击单元与任务、底栏按钮；滚轮滚动树/日志/清单 |
 
-> TUI 的**任务树与预览全部来自本地数据库** `dump_text/dump.db`（不再联网加载，可离线浏览）；空库时提示按 `D` 导出。`D` 页增量/全量导出完成后会自动刷新任务树与已打开的预览；预览页 `u` 只重抓当前任务。任务列表选中项**居中滚动**，右侧显示滚动条。底栏会显示最近一次操作状态。
+> TUI 的**任务树与预览全部来自本地数据库** `dump_text/dump.db`（不再联网加载，可离线浏览）；空库时提示按 `D` 导出。`D` 页增量/全量导出完成后会自动刷新任务树与已打开的预览；预览页 `u` 只重抓当前任务。底栏会显示最近一次操作状态。
 
 #### 命令一览
 
@@ -332,11 +349,18 @@ cargo test
 
 覆盖内容解密（ZeroPadding）、多选/单选答案解析、编号填空拆分、LLM 地址归一化、VTT 字幕解析、媒体 URL 提取等。
 ## 建议使用步骤
+### CLI式
 1. 先使用dump-text 生成所有题目的转写
 2. 再使用group命令对每种题型的任务组进行测试，或者用test-types，可以把输出结果给AI分析
 3. 如果全部测试通过，则可以使用run命令一键刷完
 4. 如果某种题型的分数很低（注意部分题型本来就没有分），且环境均配置好（尤其是ffmpeg和whisper没有配置好会导致程序无法回答包含视频，音频的题目），则可能是程序bug，请向作者报告
-5. 如何报告bug：使用debug命令运行一次存在问题的任务组，附上程序输出，并写上错误描述，题目类型，在issue中提出
+### TUI式
+1. 使用TUI模式运行程序
+2. 按照提示先dump到所有题目
+3. 选择几个task，先逐个测试是否能正常回答和提交所有题型
+4. 测试通过，可以按A或R一键刷题
+## 如何报告bug：
+使用debug命令运行一次存在问题的任务组，附上程序输出，并写上错误描述，题目类型，在issue中提出
 ## 更新日志
 ### 26/8/10
 - 增加了--names参数,修复了banked_cloze类题目的逻辑
@@ -353,15 +377,15 @@ cargo test
 - `authorization` 改为可选（留空自动使用 cookie 中的 `jwt=`，按 exp 选新并在 401 时回退）；
 - 新增 `class_id`/`curricula_id` 配置项；
 - `run`/`group` 自动处理讨论题，`debug` 显示完整草稿与讨论区状态，`dump-text` 支持导出含讨论题的 text/video 组；
-- 新增单词卡（vocabulary）支持：无需作答，自动标记完成（实测提交即可 pass），`debug`/`dump-text` 可查看词表；
+- 新增单词卡（vocabulary）支持：无需作答，自动标记完成，`debug` 可查看词表；
 - `dump-text` 输出改为按单元/题型分目录(`dump_text/{单元序号}_{unitId}/{题型}/{groupId}.txt`)， dump 文件首行增加必修/完成状态，`_summary.txt` 改为状态汇总；`run`/`group` 答题完成后自动同步完成状态；
 - `group`/`debug` 支持 `--force`：已通过任务默认跳过作答（`group` 不调用 LLM 不提交、`debug` 只做解析预览），加 `--force` 可强制重做/生成；
 - `dump-text` 全量归档所有叶子（含阅读/视频/浏览类页面，浏览类归入 `{单元}/view-only/`），状态跟踪覆盖全部任务；浏览类 task 叶子自动走"标记已看"提交，`debug` 对其友好提示不再报错
-- 新增了对无题目类任务的支持例如[Quotation,纯视频页面,长文阅读页面]，程序直接向服务器发送完成标志（经测试已通过）
+- 新增了对无题目类任务的支持例如[Quotation,纯视频页面,长文阅读页面]，程序直接向服务器发送完成标志
 ### 26/10/9
 - 新增 ratatui 交互式 TUI：无参数启动，支持课程/任务浏览、运行与取消、dump 总览与导出、配置编辑（保存后重建会话）、只读预览与讨论草稿（弹窗确认）、鼠标操作；核心流程重构为 Reporter 事件回调，CLI 行为保持不变,底栏增加状态提示行；dump 页区分"尚无数据（提示导出）"与"读取中"状态，读取失败写入日志面板
 - 新增运行日志：每次运行在 `logs/` 生成独立文件（本地时间命名），自动清理 3 天前 `unipus-*.log`；CLI 同时输出到终端，TUI 同时显示在日志面板
-- `dump-text` 输出改为 **SQLite 数据库** `dump_text/dump.db`，弃用 `dump_text/` 下的 `.txt` 文件与 `_summary.txt`（旧文件不再维护，可自行删除）
+- `dump-text` 输出改为 **SQLite 数据库** `dump_text/dump.db`，弃用 `dump_text/` 下的 `.txt` 文件与 `_summary.txt`
 - 数据库保存：单元索引/单元名、任务组 id、tab 类型、题型、kind（task/view-only）、必修、完成情况、更新时间；模块类型/replyType/instanceId/答题说明/材料文本/内嵌字幕/词库；媒体 URL 与转写全文（失败存错误）；题目回答类型/题目类型/题干/完整选项；单词卡单词与发音链接
 - 所有文本**全文入库**
 - `run`/`group`/TUI 完成任务后直接 UPDATE 数据库状态；TUI dump 页改为实时查库生成汇总，空库时提示导出

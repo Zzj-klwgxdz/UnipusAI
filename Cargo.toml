@@ -27,3 +27,5 @@ crossterm = "0.29"
 tokio-util = { version = "0.7", features = ["rt"] }
 time = { version = "0.3", features = ["local-offset", "formatting", "macros"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
+figlet-rs = "1.0.0"
+colored = "3.1.1"
