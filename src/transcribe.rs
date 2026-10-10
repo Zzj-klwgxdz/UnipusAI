@@ -68,6 +68,16 @@ fn extract_wav(media: &PathBuf, wav: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// whisper-candle 的输出开关：TUI 下完全静默（None，避免进度条/语言检测打印破坏界面），
+/// CLI 下保留进度条（Some(false)）。
+fn whisper_verbose() -> Option<bool> {
+    if crate::logging::tui_active() {
+        None
+    } else {
+        Some(false)
+    }
+}
+
 /// 用纯 Rust whisper（whisper-candle-core）转写 wav。
 /// language 为 "auto" / 空时传 None，让模型自动检测语种。
 fn whisper_infer(wav: &PathBuf, model: &str, language: &str) -> Result<String> {
@@ -97,7 +107,7 @@ fn whisper_infer(wav: &PathBuf, model: &str, language: &str) -> Result<String> {
 
     let mut options = whisper_core::TranscribeOptions::default();
     options.decode_options.language = lang_opt;
-    options.verbose = Some(false);
+    options.verbose = whisper_verbose();
     let result =
         whisper_core::transcribe_file(wp_model, wav, &options).context("whisper 转录失败")?;
     Ok(result.text.trim().to_string())
@@ -214,7 +224,12 @@ pub async fn transcribe_media(session: &Session, url: &str) -> Result<String> {
     } else {
         extract_wav(&media, &wav)?;
     }
+    log::info!(
+        "whisper 转写中: {}",
+        crate::api::parser::truncate_text(url, 80)
+    );
     let text = whisper_infer(&wav, &cfg.whisper_model, &cfg.whisper_language)?;
+    log::info!("whisper 转写完成: {} 字", text.chars().count());
     std::fs::write(&cache_txt, &text).ok();
     Ok(text)
 }
@@ -264,5 +279,15 @@ mod tests {
         let text = vtt_to_text(vtt);
         assert_eq!(text, "Hi, everyone!\nWelcome!");
         assert!(!text.contains("-->"));
+    }
+
+    #[test]
+    fn whisper_verbose_silent_in_tui() {
+        // 默认（非 TUI）：保留 CLI 进度条
+        assert_eq!(whisper_verbose(), Some(false));
+        // TUI：完全静默，避免第三方打印破坏界面
+        crate::logging::set_tui_active();
+        assert_eq!(whisper_verbose(), None);
+        crate::logging::reset_tui_active();
     }
 }

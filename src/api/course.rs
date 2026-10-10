@@ -98,13 +98,13 @@ pub struct GroupTask {
 }
 
 pub async fn fetch_unit(session: &Session, unit_id: &str) -> Result<ProgressRt> {
-    let url = unit_progress_url(session.course_id(), unit_id, session.open_id());
+    let url = unit_progress_url(session.course_id(), unit_id, &session.open_id());
     let resp: ProgressResponse = session.get_json(&url).await?;
     Ok(resp.rt)
 }
 
 pub async fn fetch_course_progress(session: &Session) -> Result<CourseProgressRt> {
-    let url = progress_url(session.course_id(), session.open_id());
+    let url = progress_url(session.course_id(), &session.open_id());
     let resp: CourseProgressResponse = session.get_json(&url).await?;
     Ok(resp.rt)
 }
@@ -208,6 +208,119 @@ fn course_name_cache() -> &'static Mutex<BTreeMap<String, String>> {
 /// 首页课程列表接口：value.courseList[].courseResourceList[].instanceId 与 course_id 一致，
 /// name 为可读课程名。注意该接口返回 code=1/success，不能用 get_json（其要求 code==0）。
 const HOME_COURSE_LIST_URL: &str = "https://uai.unipus.cn/api/cmgt/course/getHomeCourseListByStudent";
+
+/// 账号下的一门课程（首页课程列表解析结果）。
+#[derive(Debug, Clone)]
+pub struct HomeCourse {
+    pub name: String,
+    pub course_id: String,
+    /// 班级 id（courseList[].classId），讨论题 BBS 接口使用。
+    pub class_id: String,
+    /// 课程组 id（courseList[].id），即页面 URL 的 cloudCurriculaId。
+    pub curricula_id: String,
+}
+
+/// 解析首页课程列表响应（抽出便于单测）。
+pub fn parse_home_courses(v: &serde_json::Value) -> Vec<HomeCourse> {
+    let mut out = Vec::new();
+    let Some(courses) = v.pointer("/value/courseList").and_then(|c| c.as_array()) else {
+        return out;
+    };
+    for c in courses {
+        let class_id = c
+            .get("classId")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let curricula_id = c
+            .get("id")
+            .map(|x| match x {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .unwrap_or_default();
+        let fallback_name = c
+            .get("name")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let Some(res_list) = c.get("courseResourceList").and_then(|r| r.as_array()) else {
+            continue;
+        };
+        for res in res_list {
+            let course_id = res
+                .get("instanceId")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            if course_id.is_empty() {
+                continue;
+            }
+            let name = res
+                .get("name")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| fallback_name.clone());
+            out.push(HomeCourse {
+                name,
+                course_id,
+                class_id: class_id.clone(),
+                curricula_id: curricula_id.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// 拉取当前账号的全部课程。
+pub async fn fetch_home_courses(session: &Session) -> Result<Vec<HomeCourse>> {
+    let body = session
+        .get_bytes(HOME_COURSE_LIST_URL)
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .map_err(|e| anyhow::anyhow!("获取课程列表失败: {:#}", e))?;
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| anyhow::anyhow!("课程列表响应非 JSON: {:#}", e))?;
+    let ok = v.get("code").and_then(|c| c.as_i64()) == Some(1)
+        || v.get("success").and_then(|s| s.as_bool()) == Some(true);
+    if !ok {
+        anyhow::bail!(
+            "课程列表接口返回异常: {}",
+            crate::api::parser::truncate_text(&body, 200)
+        );
+    }
+    log::debug!("课程列表原始响应: {}", crate::api::parser::truncate_text(&body, 4000));
+    Ok(parse_home_courses(&v))
+}
+
+/// 账号信息接口（u-school 头所需学校编号）。
+const ACCOUNT_USER_INFO_URL: &str = "https://uai.unipus.cn/api/account/user/info";
+
+/// 拉取账号学校编号（value.userInfo.school，如 "8320"）；无则返回 None。
+pub async fn fetch_user_school(session: &Session) -> Result<Option<String>> {
+    let body = session
+        .get_bytes(ACCOUNT_USER_INFO_URL)
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .map_err(|e| anyhow::anyhow!("获取账号信息失败: {:#}", e))?;
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| anyhow::anyhow!("账号信息响应非 JSON: {:#}", e))?;
+    let ok = v.get("code").and_then(|c| c.as_i64()) == Some(1)
+        || v.get("success").and_then(|s| s.as_bool()) == Some(true);
+    if !ok {
+        anyhow::bail!(
+            "账号信息接口返回异常: {}",
+            crate::api::parser::truncate_text(&body, 200)
+        );
+    }
+    Ok(v.pointer("/value/userInfo/school")
+        .map(|x| match x {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+        .filter(|s| !s.is_empty()))
+}
 
 /// 查询课程名：优先用首页课程列表接口按 instanceId 精确匹配，
 /// 失败或未命中时回退到 course_display_name_fallback 的启发式解析。
@@ -330,5 +443,45 @@ mod tests {
             course_display_name_fallback("course-v2:x+yz_3+9"),
             "未知书本(yz)未知版本()未知课程() 3"
         );
+    }
+
+    #[test]
+    fn parse_home_courses_extracts_fields() {
+        let v = serde_json::json!({
+            "code": 1,
+            "value": {
+                "courseList": [
+                    {
+                        "id": 369622,
+                        "name": "教材课程",
+                        "classId": "1840882666005127243",
+                        "courseResourceList": [
+                            {"instanceId": "course-v2:a+nhce_v4_rw_3+20230116", "name": "新视野3"},
+                            {"instanceId": "course-v2:b+nhce_v4_rw_2+20230116", "name": ""}
+                        ]
+                    },
+                    {
+                        "id": "888",
+                        "classId": "999",
+                        "courseResourceList": [
+                            {"instanceId": "course-v2:c+x+1", "name": ""}
+                        ]
+                    }
+                ]
+            }
+        });
+        let list = parse_home_courses(&v);
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].name, "新视野3");
+        assert_eq!(list[0].course_id, "course-v2:a+nhce_v4_rw_3+20230116");
+        assert_eq!(list[0].class_id, "1840882666005127243");
+        assert_eq!(list[0].curricula_id, "369622");
+        // 资源名为空回退 courseList 名称；无 courseList 名称则为空
+        assert_eq!(list[1].name, "教材课程");
+        assert_eq!(list[2].name, "");
+        assert_eq!(list[2].class_id, "999");
+        assert_eq!(list[2].curricula_id, "888");
+
+        assert!(parse_home_courses(&serde_json::json!({})).is_empty());
     }
 }

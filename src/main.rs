@@ -6,6 +6,7 @@ use crossterm::event::{self, Event, KeyEventKind};
 // use crossterm::style::Stylize;
 use crossterm::terminal;
 use figlet_rs::FIGlet;
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -50,7 +51,11 @@ async fn main() -> Result<()> {
     if args.len() <= 1 || cmd == "--tui" || cmd == "tui" {
         wait_any_key()?;
         let cfg = Config::load(&config_path)?;
-        let session = Session::new(cfg, config_path)?;
+        let mut session = Session::new(cfg, config_path)?;
+        // 离线可用：登录失败仅提示，仍进入 TUI（任务树来自本地数据库）
+        if let Err(e) = UnipusAI::api::login::ensure_login(&mut session).await {
+            eprintln!("提示: 自动登录未完成（{:#}），将以本地数据模式运行", e);
+        }
         return UnipusAI::tui::run_tui(session, run_log).await;
     }
 
@@ -83,7 +88,45 @@ async fn main() -> Result<()> {
     }
 
     let cfg = Config::load(&config_path)?;
-    let session = Session::new(cfg.clone(), config_path.clone())?;
+    let mut session = Session::new(cfg.clone(), config_path.clone())?;
+
+    // 帮助最优先，不触发登录
+    if matches!(cmd, "help" | "-h" | "--help") {
+        print_help();
+        return Ok(());
+    }
+    // 登录/刷新与课程选择命令
+    if cmd == "login" {
+        cmd_login(&mut session, &args[2..]).await?;
+        return Ok(());
+    }
+    if cmd == "courses" {
+        UnipusAI::api::login::ensure_login(&mut session).await?;
+        UnipusAI::api::login::ensure_profile(&mut session).await?;
+        cmd_courses(&session).await?;
+        return Ok(());
+    }
+    if cmd == "course" {
+        UnipusAI::api::login::ensure_login(&mut session).await?;
+        UnipusAI::api::login::ensure_profile(&mut session).await?;
+        cmd_course(&mut session, &args[2..]).await?;
+        return Ok(());
+    }
+    if cmd == "annotator" {
+        cmd_annotator(&mut session, &args[2..]).await?;
+        return Ok(());
+    }
+
+    // 其余命令：先确保登录凭证有效，并刷新课程相关字段
+    UnipusAI::api::login::ensure_login(&mut session).await?;
+    UnipusAI::api::login::ensure_profile(&mut session).await?;
+    // 与课程内容相关的命令要求已选课程
+    if matches!(
+        cmd,
+        "progress" | "run" | "group" | "debug" | "test-types" | "dump-text"
+    ) {
+        UnipusAI::api::login::ensure_course(&session)?;
+    }
 
     match cmd {
         "progress" => cmd_progress(&session, &args[2..]).await?,
@@ -96,12 +139,208 @@ async fn main() -> Result<()> {
             cmd_transcribe(&session, url).await?
         }
         "dump-text" => cmd_dump_text(&session, &args[2..]).await?,
-        "help" | "-h" | "--help" => print_help(),
         other => {
             eprintln!("未知命令: {}", other);
             print_help();
         }
     }
+    Ok(())
+}
+
+/// `login [--force]`：查看登录态；--force 用账号密码强制重新登录。
+async fn cmd_login(session: &mut Session, args: &[String]) -> Result<()> {
+    let force = args.iter().any(|a| a == "--force");
+    let cfg = session.cfg().clone();
+    if force {
+        if cfg.username.is_empty() || cfg.password.is_empty() {
+            anyhow::bail!("config.json 缺 username/password，无法强制登录");
+        }
+        let c = UnipusAI::api::login::login(&cfg.username, &cfg.password).await?;
+        let mut nc = cfg.clone();
+        UnipusAI::api::login::apply(&mut nc, &c);
+        session.update_config(nc)?;
+        println!("已重新登录（账号 {}）", cfg.username);
+    } else {
+        let changed = UnipusAI::api::login::ensure_login(session).await?;
+        if !changed {
+            println!("登录凭证仍有效，无需刷新");
+        }
+    }
+    // 每次启动刷新 class_id/curricula_id/u_school/publish_version
+    UnipusAI::api::login::ensure_profile(session).await?;
+    let cfg = session.cfg();
+    let jwt = cfg.cookie_jwt().unwrap_or_default();
+    let exp = UnipusAI::api::login::jwt_exp(&jwt).unwrap_or(0);
+    println!(
+        "jwt 过期时间: {} | refresh_token 过期: {}",
+        fmt_unix(exp),
+        if cfg.rt_expire > 0 { fmt_unix(cfg.rt_expire) } else { "未知".into() }
+    );
+    println!("open_id: {}", session.open_id());
+    Ok(())
+}
+
+fn fmt_unix(secs: i64) -> String {
+    if secs <= 0 {
+        return "未知".into();
+    }
+    time::OffsetDateTime::from_unix_timestamp(secs)
+        .ok()
+        .and_then(|t| {
+            t.format(time::macros::format_description!(
+                "[year]-[month]-[day] [hour]:[minute]"
+            ))
+            .ok()
+        })
+        .unwrap_or_else(|| secs.to_string())
+}
+
+/// `annotator [--extract]`：查看/重新提取 x-annotator-auth-token 签发参数。
+async fn cmd_annotator(session: &mut Session, args: &[String]) -> Result<()> {
+    use UnipusAI::api::login::{self, AnnotatorParams};
+    let force = args.iter().any(|a| a == "--extract");
+    if force {
+        let mut cfg = session.cfg().clone();
+        if cfg.open_id.is_empty() {
+            anyhow::bail!("config.json open_id 为空：请先填写 username/password 自动登录");
+        }
+        match login::extract_annotator_params().await {
+            Ok(p) => {
+                let cur = AnnotatorParams::from_config(&cfg);
+                let same = p == cur;
+                println!(
+                    "从 bundle 提取成功: iss={} aud={} ttl={}ms key={}…{}",
+                    p.iss,
+                    p.aud,
+                    p.ttl_ms,
+                    &p.key[..p.key.len().min(8)],
+                    if same { "（与当前参数一致）" } else { "（已更新）" }
+                );
+                cfg.annotator_key = p.key;
+                cfg.annotator_iss = p.iss;
+                cfg.annotator_aud = p.aud;
+                cfg.annotator_ttl_ms = p.ttl_ms;
+            }
+            Err(e) => println!("从 bundle 提取失败: {:#}（保留现有参数并重签）", e),
+        }
+        let params = AnnotatorParams::from_config(&cfg);
+        cfg.x_annotator_auth_token = login::generate_annotator_token(&cfg.open_id, &params);
+        session.update_config(cfg)?;
+        println!("已重新签发 x_annotator_auth_token");
+    }
+    let cfg = session.cfg().clone();
+    let params = AnnotatorParams::from_config(&cfg);
+    let source = if params.is_builtin() {
+        "内置默认"
+    } else {
+        "bundle 提取/手动"
+    };
+    println!(
+        "签发参数: 来源={} iss={} aud={} ttl={}天 key={}…",
+        source,
+        params.iss,
+        params.aud,
+        params.ttl_ms / 86_400_000,
+        &params.key[..params.key.len().min(8)]
+    );
+    match login::jwt_payload(&cfg.x_annotator_auth_token)
+        .and_then(|p| p.get("exp").and_then(|x| x.as_u64()))
+    {
+        Some(exp_ms) => {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let days = exp_ms.saturating_sub(now_ms) / 86_400_000;
+            println!(
+                "当前 token: 剩余 {} 天{}",
+                days,
+                if login::annotator_token_ok(&cfg.x_annotator_auth_token) {
+                    ""
+                } else {
+                    "（已失效/需重签）"
+                }
+            );
+        }
+        None => println!("当前 token: 缺失或无法解析"),
+    }
+    Ok(())
+}
+
+/// `courses`：列出账号下全部课程（* 标记当前选择）。
+async fn cmd_courses(session: &Session) -> Result<()> {
+    let list = UnipusAI::api::course::fetch_home_courses(session).await?;
+    if list.is_empty() {
+        println!("未查询到课程（账号下暂无课程）");
+        return Ok(());
+    }
+    let current = session.course_id();
+    println!("共 {} 门课程：", list.len());
+    for (i, c) in list.iter().enumerate() {
+        let mark = if c.course_id == current { "*" } else { " " };
+        println!("{} [{}] {}  {}", mark, i + 1, c.name, c.course_id);
+    }
+    if current.is_empty() {
+        println!("\n当前未选择课程：运行 `UnipusAI course <序号>` 选择");
+    }
+    Ok(())
+}
+
+/// `course [序号|course_id]`：查看或选择当前课程（写入 config.json）。
+async fn cmd_course(session: &mut Session, args: &[String]) -> Result<()> {
+    let list = UnipusAI::api::course::fetch_home_courses(session).await?;
+    if args.is_empty() {
+        let cur = session.course_id();
+        if cur.is_empty() {
+            println!("当前未选择课程；可用课程：");
+        } else {
+            let name = list
+                .iter()
+                .find(|c| c.course_id == cur)
+                .map(|c| c.name.as_str())
+                .unwrap_or("(不在课程列表中)");
+            println!("当前课程: {}  {}", name, cur);
+            println!("可用课程：");
+        }
+        for (i, c) in list.iter().enumerate() {
+            let mark = if c.course_id == cur { "*" } else { " " };
+            println!("{} [{}] {}  {}", mark, i + 1, c.name, c.course_id);
+        }
+        return Ok(());
+    }
+    let sel = args[0].trim();
+    let chosen = if let Ok(n) = sel.parse::<usize>() {
+        list.get(n.saturating_sub(1))
+    } else {
+        list.iter().find(|c| c.course_id == sel)
+    };
+    let Some(c) = chosen else {
+        anyhow::bail!("未找到课程「{}」：运行 `UnipusAI courses` 查看可用课程", sel);
+    };
+    let mut cfg = session.cfg().clone();
+    let old_class = cfg.class_id.clone();
+    cfg.course_id = c.course_id.clone();
+    if !c.class_id.is_empty() {
+        cfg.class_id = c.class_id.clone();
+    }
+    if !c.curricula_id.is_empty() {
+        cfg.curricula_id = c.curricula_id.clone();
+    } else if old_class != cfg.class_id {
+        // 列表异常未返回 curricula_id：换课程时清空旧值避免用错
+        if !cfg.curricula_id.is_empty() {
+            println!(
+                "注意：课程列表未返回 curricula_id，已清空旧值（原 {}）；讨论题需手动填写新值（页面 URL 的 cloudCurriculaId）",
+                cfg.curricula_id
+            );
+        }
+        cfg.curricula_id.clear();
+    }
+    session.update_config(cfg)?;
+    // 缓存课程名，供 TUI 离线显示
+    if let Ok(conn) = UnipusAI::db::open() {
+        let _ = UnipusAI::db::save_meta(&conn, &format!("course_name:{}", c.course_id), &c.name);
+    }
+    println!("已选择课程: {}  {}", c.name, c.course_id);
     Ok(())
 }
 
@@ -527,14 +766,30 @@ fn print_help() {
       所有叶子全量导出；浏览类页面（内容为空/非 JSON/无题目模块）按 view-only 保存原始内容
       run/group 答题完成后自动同步状态；--force 清空数据库并重新生成
 
+  login [--force]
+      查看登录状态（jwt/refresh_token 有效期）；--force 用账号密码强制重新登录
+
+  courses
+      列出账号下全部课程（* 标记当前选择）
+
+  course [序号|courseId]
+      查看或选择当前课程（写入 config.json，所有命令共用）
+
+  annotator [--extract]
+      查看 x-annotator-auth-token 签发参数与剩余有效期；
+      --extract 强制从 ucontent 前端 bundle 重新提取参数并重签（密钥轮换时自动自愈用）
+
 参数:
   --names       显示课程名与单元名（如 新视野大学英语(第四版)读写教程 / U1 Pre-reading activities），
                 结果缓存到 .unit_labels.json
   --interval    两次提交间隔，默认 3000ms，如 --interval 5000 或 --interval=5000
-  --force       dump-text 清空并全量重新生成；group/debug 忽略“已通过”跳过、强制重做/生成
+  --force       dump-text 清空并全量重新生成；group/debug 忽略“已通过”跳过、强制重做/生成；login 强制重登
   <unitId...>   只处理指定单元（可多个），省略则处理全部单元
 
 示例:
+  UnipusAI login
+  UnipusAI courses
+  UnipusAI course 1
   UnipusAI progress --names
   UnipusAI run --interval 5000
   UnipusAI run 6bbb2df99001b1e
@@ -543,7 +798,10 @@ fn print_help() {
   UnipusAI dump-text --force
 
 说明:
-  配置见 config.json（含 cookie、course_id 等，讨论题另需 class_id/curricula_id），unit_id 已无需填写。
+  config.json 推荐只填 username/password（自动登录并刷新 cookie/open_id，24h 内不重复登录）；
+  也可继续使用 cookie（含 jwt=）方式。class_id/curricula_id/u_school/publish_version 每次启动
+  自动从接口刷新，x_annotator_auth_token 由程序本地签发（1 年有效，剩余 <30 天自动续签），
+  均无需手填；unit_id 已无需填写。
 "#
     );
 }
@@ -552,8 +810,17 @@ fn print_hello() -> Result<()> {
     if let Some(title) = font.convert("UnipusAI") {
         println!("{}", title.to_string().cyan());
     }
-    println!("{}","UnipusAI_v3.4\n\t\t\t--by Zzj\nU校园AI版自动刷题脚本".truecolor(255, 153, 255).bold());
-    println!("本软件完全免费，并且在https://github.com/Zzj-klwgxdz/UnipusAI上开源，作者未授权给任何人售卖。如果你是通过购买获得的，请立刻退货，并向平台举报");
+    println!("{}","UnipusAI_v3.5\n\t\t\t--by Zzj\nU校园AI版自动刷题脚本".truecolor(255, 153, 255).bold());
+    println!("{}",r#"v3.5更新日志
+        - 新增**账号密码自动登录**：`config.json` 只填 `username`/`password` 即可；启动时 jwt 剩余 >24h 直接用、否则 refresh_token 刷新、失败再用账密重登，凭证自动写回 cookie/open_id/refresh_token；运行中接口 401 自动刷新并重试（单飞防并发）；受服务端验证码（极验/图形）限制时给出明确提示并保留 cookie 兜底
+        - 新增 CLI `login [--force]`（查看/刷新登录态）、`courses`（列出账号课程）、`course <序号|id>`（选择课程，所有命令共用，自动填充 course_id/class_id）
+        - TUI 新增课程选择界面（`c` 键，未选课程时启动自动打开）；设置页新增 username/password 字段，保存后自动尝试登录
+        - 数据库 `tasks` 新增 `course_id` 列并按课程隔离（TUI 任务树/dump 汇总只显示当前课程，旧数据按 meta 自动回填）
+        - `x_annotator_auth_token` 改为**本地自动签发**（前端同算法/同密钥的 HS256 JWT，1 年有效，剩余 <30 天自动续签）——至此凭证类字段全部无需手动填写
+        - annotator 签名参数改为**按需从 ucontent 前端 bundle 动态提取**（仅 token 需重签或请求 401 时触发），密钥/iss/aud/TTL 轮换后可自动自愈；401 处理升级为"jwt 刷新 → annotator 重提取重签 → 提示手动兜底"阶梯；新增 `annotator [--extract]` 命令查看/强制重提取"#.green()
+    );
+    println!("{}","提示：如果你现在用的是v3.4及以前的config.json请更新到v3.5版本的".bright_magenta().bold());
+    println!("{}","本软件完全免费，并且在https://github.com/Zzj-klwgxdz/UnipusAI上开源，作者未授权给任何人售卖。如果你是通过购买获得的，请立刻退货，并向平台举报".yellow().bold());
     println!("{}","导狗死全家".red().bold());
     Ok(())
 }

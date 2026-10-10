@@ -202,6 +202,7 @@ mod tests {
                 passed: false,
                 raw_content: None,
                 raw_json: Some("{}"),
+                course_id: "course-x",
                 group: Some(&group),
                 vocab: &[],
                 media: &media,

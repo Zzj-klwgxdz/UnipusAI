@@ -1,13 +1,12 @@
 # UnipusAI —— U校园 AI 版刷课脚本
 
 本项目是原 Python + Selenium 版（v2.4）的 **Rust 完全重写版**：
+> 原 Python 版本（`Unipus_v2.4.py`、`AudioRecognizer.py`、`EnvironmentChecker.py` 等）已归档到v2.4分支。
 不需要浏览器、不需要 WebDriver，纯命令行 + 原生 HTTP 实现，更轻量、更快、更稳定
-### 如想用浏览器自动化方案请看[这个](https://github.com/YSJohnson/UnipusAI-Helper),这个项目继承了原python版本的主要功能，并优化了用户体验
+### 如想用浏览器自动化方案请看[v2.4分支（bug较多）](https://github.com/Zzj-klwgxdz/UnipusAI/tree/v2.4)或者[这个（更推荐）](https://github.com/YSJohnson/UnipusAI-Helper),这个项目继承了原python版本的主要功能，并优化了用户体验
 ### 该项目在测试阶段，可能存在诸多问题，欢迎各位到issue留言
 ### 因为程序可能对部分题型没有适配完全，所以可能部分题目程序作答提交的成绩为0。请勿无脑使用一键刷题命令，由此导致的一切后果请自行承担
-### 如果你是从视频平台过来的，如果不会使用尽量不要通过评论区或私信向我提问（大概率不回），请向ai（豆包，deepseek等）提问：“阅读这个项目https://github.com/Zzj-klwgxdz/UnipusAI，我应该如何使用。” 或者通过agent工具直接让它配置好
-
-> 原 Python 版本（`Unipus_v2.4.py`、`AudioRecognizer.py`、`EnvironmentChecker.py` 等）已删除。
+### 如果你是从视频平台过来的，如果不会使用尽量不要通过评论区或私信向我提问（大概率不回），请向ai（豆包，deepseek等）提问：“阅读这个项目`https://github.com/Zzj-klwgxdz/UnipusAI`，我应该如何使用。” 或者通过agent工具直接让它配置好。
 
 ## 主要功能
 
@@ -79,11 +78,20 @@ src/
 ## 核心实现原理
 
 ### 1. 登录态
-程序不实现浏览器登录。从浏览器复制登录后的凭证填入 `config.json`：
 
-- `cookie`：浏览器请求头里的 `Cookie`（**必填且唯一需要维护**，其中包含 `jwt=` 登录 token）。
-- `authorization`：登录后的 JWT；**可留空或直接删除**，程序会自动使用 cookie 中的 `jwt=`（两者通常是同一个 token）。若两者都填，程序会自动选用 exp 更新的那个，401 时自动回退。
-- `x_annotator_auth_token`、`u_school`、`open_id`、`course_id`、`publish_version`：同样从浏览器请求中获取。
+**推荐：只填账号密码，程序自动登录**（`config.json`）：
+
+- `username` / `password`：U校园通行证手机号/邮箱与密码（本地明文保存）。启动时自动调用 SSO 登录并写回 cookie/open_id/refresh_token：
+  - jwt 剩余 > 24h 直接使用；否则先用 refresh_token 刷新；失败再用账号密码重新登录；
+  - 刷题过程中接口返回 401 会自动刷新并重试（refresh_token → 账号密码，单飞防并发）；
+  - 服务端风控（极验滑块/图形验证码）无法自动通过，会给出明确报错，此时可改用下面的 cookie 方式兜底。
+- `x_annotator_auth_token`：**ucontent 内容接口必需的凭证**（约 1 年有效），首次使用需从浏览器复制一次（登录后访问任意课程，在请求头的 `x-annotator-auth-token` 中获取）。
+- 讨论题另需 `class_id`（课程列表 classId 自动填充）与 `curricula_id`（页面 URL 的 cloudCurriculaId，切换课程时会清空并提示重填）。
+
+**备选：浏览器 cookie 方式**（与旧版一致）：
+
+- `cookie`：浏览器请求头里的 `Cookie`（含 `jwt=`）；`authorization` 可留空，程序自动用 cookie 中的 `jwt=`。
+- `open_id`、`course_id` 等从浏览器请求中获取；也可用 `UnipusAI courses` / `UnipusAI course <序号>` 自动列出并选择。
 
 `Session` 会为每个请求自动附带这些头，以及固定的 `u-app-id`、`u-platform`、`origin`、`referer` 等。
 
@@ -215,15 +223,17 @@ export HF_ENDPOINT=https://hf-mirror.com
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `timeout` | 否 | HTTP 超时秒数，默认 10 |
-| `cookie` | **是** | 浏览器登录后的 Cookie（含 `jwt=`，是唯一必须维护的登录凭证） |
+| `username` / `password` | **推荐** | U校园通行证账号/密码（明文），自动登录并刷新 cookie/open_id/refresh_token |
+| `cookie` | 备选必填 | 浏览器登录后的 Cookie（含 `jwt=`）；未填账号密码时使用 |
 | `authorization` | 否 | ucontent JWT；**留空即可**，程序会自动用 cookie 中的 `jwt=` 代替 |
-| `x_annotator_auth_token` | **是** | 批注鉴权 token |
-| `u_school` | **是** | 学校编号 |
-| `course_id` | **是** | 课程 id，如 `course-v2:...` |
-| `class_id` | 讨论题必填 | 班级 id（页面 URL 的 `cid`），讨论区接口使用 |
-| `curricula_id` | 讨论题必填 | AI 版课程 id（页面 URL 的 `cloudCurriculaId`），讨论区接口使用 |
-| `open_id` | **是** | 用户 open id |
-| `publish_version` | 是 | 课程发布版本号（会自动更新） |
+| `refresh_token` / `jwt_expire` / `rt_expire` | 自动 | 登录后自动写入，用于免密刷新，无需手填 |
+| `x_annotator_auth_token` | 自动 | ucontent 内容接口鉴权 token，本地按前端同算法/参数签发（剩余 <30 天自动续签）；签名参数从 ucontent 前端 bundle **按需动态提取**，密钥轮换时运行中 401 会自动重提取重签；手动粘贴的有效 token 不会被覆盖 |
+| `u_school` | 自动 | 学校编号（每次启动从账号信息接口刷新） |
+| `course_id` | **是** | 课程 id，如 `course-v2:...`（可用 `UnipusAI course <序号>` 自动选择） |
+| `class_id` | 自动 | 班级 id（每次启动从课程列表 classId 刷新） |
+| `curricula_id` | 自动 | AI 版课程 id（每次启动从课程列表 id=cloudCurriculaId 刷新） |
+| `open_id` | 自动/是 | 用户 open id（自动登录时自动填充） |
+| `publish_version` | 自动 | 课程发布版本号（每次启动从课程进度接口刷新） |
 | `api_key` | 是 | 大模型 API key |
 | `base_url` | 是 | 大模型地址，如 `https://api.deepseek.com` |
 | `model` | 是 | 模型名 |
@@ -235,6 +245,8 @@ export HF_ENDPOINT=https://hf-mirror.com
 | `whisper_language` | 否 | 转写语言，`auto`自动检测/可指定 `en`、`zh` |
 
 #### 各项配置如何获取
+
+> 只填 `username`/`password` 时，下文各项都可跳过：凭证类字段全部自动获取/本地签发（`x_annotator_auth_token` 由程序内嵌密钥本地生成）。
 
 以 Microsoft Edge为例：
 
@@ -262,7 +274,7 @@ export HF_ENDPOINT=https://hf-mirror.com
 - `timeout`、`max_tokens`、`temperature`、`fallback_on_llm_failure`、`whisper_*` 均为可选，按需修改即可。
 - 字段中可能有双引号`""`影响（尤其是cookie），导致程序出错，粘贴前需要检查，如果有双引号需要在双引号前加`\`取消转义
 - `publish_version` 首次运行 `run` 时检测到变更会自动回写 config.json，可不手工改。
-- cookie、authorization 等登录凭证有有效期，失效后需按上述步骤重新复制。**推荐只维护 cookie**：authorization 留空时程序自动使用 cookie 中的 `jwt=`（讨论题 BBS 接口需要 JWT，两者都过期时才会 401）。
+- **推荐只填 `username`/`password`**：程序自动登录并维护 cookie（启动时 >24h 不重登，否则 rt 刷新→账密重登；运行中 401 也会自动刷新）。`class_id`/`curricula_id`/`u_school`/`publish_version` 每次启动自动从接口刷新；`x_annotator_auth_token` 由程序本地签发、签名参数按需从 ucontent 前端 bundle 动态提取（密钥轮换可自愈），均无需手填。仅在触发验证码等无法自动登录时，才改用浏览器 cookie 方式兜底。
 ![course_id](/imgs/course_id.png)
 *course_id*
 ![x_auth](/imgs/X-Auth.png)
@@ -294,19 +306,24 @@ export HF_ENDPOINT=https://hf-mirror.com
 | ←/→ `h/l` | 折叠 / 展开单元 |
 | Enter | 单元行=展开；任务行=运行（已通过需 `f` 强制） |
 | `f` / `R` / `A` | 强制运行选中任务 / 运行本单元 / 运行全课程 |
-| `p` / `d` | 预览选中任务（只读，不提交，内容来自本地数据库） / dump-text 总览与导出 |
+| `p` / `D` | 预览选中任务（只读，不提交，内容来自本地数据库） / dump-text 总览与导出 |
+| `c` | 选择课程（账号下课程列表，Enter 确认后写回配置并刷新任务树） |
 | `u` | 预览页：重新抓取当前任务并更新入库（完成后自动刷新预览与任务树） |
 | `g` | 预览页生成讨论草稿（调用 LLM 前弹窗确认） |
-| `s` / `w` / `v` | 设置 / 保存配置并重建会话 / 显示敏感字段 |
+| `s` / `w` / `v` | 设置 / 保存配置并重建会话（保存后自动尝试登录） / 显示敏感字段 |
 | `r` / `q` / `Esc` | 刷新任务树（重读数据库） / 退出 / 运行中取消（再按返回上级） |
 | 鼠标 | 点击单元与任务、底栏按钮；滚轮滚动树/日志/清单 |
 
-> TUI 的**任务树与预览全部来自本地数据库** `dump_text/dump.db`（不再联网加载，可离线浏览）；空库时提示按 `D` 导出。`D` 页增量/全量导出完成后会自动刷新任务树与已打开的预览；预览页 `u` 只重抓当前任务。底栏会显示最近一次操作状态。
+> TUI 的**任务树与预览全部来自本地数据库** `dump_text/dump.db`（不再联网加载，可离线浏览）；空库时提示按 `D` 导出。`D` 页增量/全量导出完成后会自动刷新任务树与已打开的预览；预览页 `u` 只重抓当前任务。未选择课程时启动会直接打开课程选择页。底栏会显示最近一次操作状态。
 
 #### 命令一览
 
 | 命令 | 说明 |
 | --- | --- |
+| `login [--force]` | 查看登录状态（jwt/refresh_token 有效期）；`--force` 用账号密码强制重新登录 |
+| `courses` | 列出账号下全部课程（`*` 标记当前选择） |
+| `course [序号\|courseId]` | 查看或选择当前课程（写入 config.json，所有命令共用） |
+| `annotator [--extract]` | 查看 x-annotator-auth-token 签发参数与剩余有效期；`--extract` 强制从前端 bundle 重新提取参数并重签 |
 | `progress [--names]` | 打印课程全部单元/任务树（按 `learning_strategy` 过滤） |
 | `run [--names] [--interval <毫秒>] [unitId...]` | 默认自动完成全课程，也可指定单元 |
 | `group <groupId> [--force]` | 直接提交指定任务组（LLM 答题；讨论题自动发帖）；已通过任务默认跳过（不调用 LLM、不提交），`--force` 强制重做 |
@@ -321,14 +338,14 @@ export HF_ENDPOINT=https://hf-mirror.com
 | --- | --- | --- |
 | `--names` | `progress` / `run` / `dump-text` | 显示课程名与单元名（如 新视野大学英语(第四版)读写教程 / U1 Pre-reading activities），结果缓存到 `.unit_labels.json`，不传则不额外请求 |
 | `--interval <毫秒>` | `run` | 两次提交间隔，默认 3000ms，如 `--interval 5000` 或 `--interval=5000` |
-| `--force` | `dump-text` / `group` / `debug` | dump-text：清空数据库并全量重新生成；group/debug：忽略"已通过"跳过，强制重做/生成 |
+| `--force` | `dump-text` / `group` / `debug` / `login` | dump-text：清空数据库并全量重新生成；group/debug：忽略"已通过"跳过，强制重做/生成；login：强制重新登录 |
 | `<unitId...>` | `run` / `dump-text` | 只处理指定单元（可多个）；省略则处理全部单元 |
 
 ### 转写与文本导出
 
 - `transcribe <url>` 可对任意媒体 URL 单独验证转写链路，结果按 URL 缓存。
 - `dump-text` 遍历全课程（或指定单元），把**所有叶子全量**写入 SQLite 数据库 `dump_text/dump.db`（可被任意 SQLite 客户端打开查询）；题型名取 `reply_type`（空则回退 `module_type`）；内容为空/非 JSON/无题目模块的**浏览类页面**按 `view-only` 保存原始内容全文。
-  - 入库字段：任务表保存单元索引/单元 id/单元名/任务组 id/tab 类型/题型/kind/**必修**/**完成情况**/原始内容/**解密原文 JSON**/更新时间；模块表保存模块类型/replyType/instanceId/**答题说明**/**材料文本**/**内嵌字幕**/词库；媒体表保存 URL 与**转写全文**（失败保存错误信息）；题目表保存回答类型/题目类型/题干/**完整选项**；单词表保存单词与发音链接；`meta` 表保存课程 id/课程名（TUI 离线显示用）——全部存全文，不截断。
+  - 入库字段：任务表保存单元索引/单元 id/单元名/任务组 id/tab 类型/题型/kind/**必修**/**完成情况**/**课程 id（多课程隔离）**/原始内容/**解密原文 JSON**/更新时间；模块表保存模块类型/replyType/instanceId/**答题说明**/**材料文本**/**内嵌字幕**/词库；媒体表保存 URL 与**转写全文**（失败保存错误信息）；题目表保存回答类型/题目类型/题干/**完整选项**；单词表保存单词与发音链接；`meta` 表保存课程 id 与各课程名（TUI 离线显示用）——全部存全文，不截断。TUI 任务树与 dump 汇总只显示当前选中课程。
   - 已入库的任务组再次运行时只刷新状态、不重新抓题（旧库缺少 `raw_json` 时会自动重新抓取补全一次）；缺失的才抓取生成（含媒体转写，按 URL 缓存）。
   - `run`/`group` 答题提交成功后自动把对应任务更新为"已完成"；浏览类页面（task 叶子）在作答时也会直接走"标记已看"提交。
   - TUI 的任务树与预览（`p`）全部从该库加载：任务树含单元/题型/必修/完成状态；预览含解密原文 JSON、答题说明、材料、字幕、媒体转写、单词卡与题干选项。空库时提示按 `D` 导出。
@@ -390,6 +407,13 @@ cargo test
 - 所有文本**全文入库**
 - `run`/`group`/TUI 完成任务后直接 UPDATE 数据库状态；TUI dump 页改为实时查库生成汇总，空库时提示导出
 - TUI 任务树与预览改为全部从数据库加载：启动即显示，可离线浏览；空库提示按 `D` 导出
+### 26/10/10
+- 新增**账号密码自动登录**：`config.json` 只填 `username`/`password` 即可；启动时 jwt 剩余 >24h 直接用、否则 refresh_token 刷新、失败再用账密重登，凭证自动写回 cookie/open_id/refresh_token；运行中接口 401 自动刷新并重试（单飞防并发）；受服务端验证码（极验/图形）限制时给出明确提示并保留 cookie 兜底
+- 新增 CLI `login [--force]`（查看/刷新登录态）、`courses`（列出账号课程）、`course <序号|id>`（选择课程，所有命令共用，自动填充 course_id/class_id）
+- TUI 新增课程选择界面（`c` 键，未选课程时启动自动打开）；设置页新增 username/password 字段，保存后自动尝试登录
+- 数据库 `tasks` 新增 `course_id` 列并按课程隔离（TUI 任务树/dump 汇总只显示当前课程，旧数据按 meta 自动回填）
+- `x_annotator_auth_token` 改为**本地自动签发**（前端同算法/同密钥的 HS256 JWT，1 年有效，剩余 <30 天自动续签）——至此凭证类字段全部无需手动填写
+- annotator 签名参数改为**按需从 ucontent 前端 bundle 动态提取**（仅 token 需重签或请求 401 时触发），密钥/iss/aud/TTL 轮换后可自动自愈；401 处理升级为"jwt 刷新 → annotator 重提取重签 → 提示手动兜底"阶梯；新增 `annotator [--extract]` 命令查看/强制重提取
 
 
 

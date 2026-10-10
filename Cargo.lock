@@ -10,6 +10,7 @@ dependencies = [
  "anyhow",
  "base64",
  "candle-core",
+ "cbc",
  "colored",
  "crossterm",
  "ecb",
@@ -17,6 +18,7 @@ dependencies = [
  "figlet-rs",
  "hex",
  "hf-hub",
+ "hmac",
  "log",
  "rand 0.8.7",
  "ratatui",
@@ -25,6 +27,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "time",
  "tokio",
  "tokio-util",
@@ -390,6 +393,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dec551ab6e7578819132c713a93c022a05d60159dc86e7a7050223577484c55a"
 dependencies = [
  "rustversion",
+]
+
+[[package]]
+name = "cbc"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26b52a9543ae338f279b96b0b9fed9c8093744685043739079ce85cd58f289a6"
+dependencies = [
+ "cipher",
 ]
 
 [[package]]
@@ -777,6 +789,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -1442,6 +1455,15 @@ dependencies = [
  "tokio",
  "ureq",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
 ]
 
 [[package]]

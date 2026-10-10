@@ -51,6 +51,33 @@ pub struct Config {
     /// 转写语言，auto/空 表示自动检测，也可指定如 en / zh。
     #[serde(default = "default_whisper_language")]
     pub whisper_language: String,
+    /// U校园通行证账号（手机号/邮箱），配置后自动登录。
+    #[serde(default)]
+    pub username: String,
+    /// U校园通行证密码（本地明文保存）。
+    #[serde(default)]
+    pub password: String,
+    /// 自动登录缓存的 refresh token。
+    #[serde(default)]
+    pub refresh_token: String,
+    /// jwt 过期时间（Unix 秒，0=未知）。
+    #[serde(default)]
+    pub jwt_expire: i64,
+    /// refresh token 过期时间（Unix 秒，0=未知）。
+    #[serde(default)]
+    pub rt_expire: i64,
+    /// annotator token 签名密钥（从 ucontent bundle 动态提取；空=内置默认）。
+    #[serde(default)]
+    pub annotator_key: String,
+    /// annotator token 的 iss 字段（空=内置默认）。
+    #[serde(default)]
+    pub annotator_iss: String,
+    /// annotator token 的 aud 字段（空=内置默认）。
+    #[serde(default)]
+    pub annotator_aud: String,
+    /// annotator token 有效期毫秒数（0=内置默认）。
+    #[serde(default)]
+    pub annotator_ttl_ms: u64,
 }
 
 fn default_whisper_model() -> String {
@@ -101,6 +128,15 @@ impl Default for Config {
             whisper_enabled: false,
             whisper_model: default_whisper_model(),
             whisper_language: default_whisper_language(),
+            username: String::new(),
+            password: String::new(),
+            refresh_token: String::new(),
+            jwt_expire: 0,
+            rt_expire: 0,
+            annotator_key: String::new(),
+            annotator_iss: String::new(),
+            annotator_aud: String::new(),
+            annotator_ttl_ms: 0,
         }
     }
 }
@@ -135,20 +171,16 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.cookie.is_empty() {
-            anyhow::bail!("config：cookie 为空，请从浏览器复制");
-        }
-        if self.cookie_jwt().is_none() && self.authorization.is_empty() {
+        let auto = !self.username.is_empty() && !self.password.is_empty();
+        let cookie_ok =
+            !self.cookie.is_empty() && (self.cookie_jwt().is_some() || !self.authorization.is_empty());
+        let rt_ok = !self.refresh_token.is_empty();
+        if !auto && !cookie_ok && !rt_ok {
             anyhow::bail!(
-                "config：cookie 中没有 jwt= 且 authorization 为空，至少需要其一（推荐只填 cookie）"
+                "config：请填写 username/password（推荐，自动登录），或重新从浏览器复制 cookie（含 jwt=）"
             );
         }
-        if self.course_id.is_empty() {
-            anyhow::bail!("config：course_id 为空，例如 course-v2:...");
-        }
-        if self.open_id.is_empty() {
-            anyhow::bail!("config：open_id 为空");
-        }
+        // 自动登录补全 course_id/open_id，具体命令在使用处（ensure_course）给出引导
         Ok(())
     }
 

@@ -15,6 +15,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         Screen::Settings => render_settings(f, app),
         Screen::Dump => render_dump(f, app),
         Screen::Preview => render_preview(f, app),
+        Screen::Courses => render_courses(f, app),
         Screen::Help => {
             render_dashboard(f, app);
             render_help(f);
@@ -505,6 +506,110 @@ fn render_dump(f: &mut Frame, app: &mut App) {
     );
 }
 
+fn render_courses(f: &mut Frame, app: &mut App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(2)])
+        .split(f.area());
+    let current = app.session.course_id().to_string();
+    let title = format!(
+        " 选择课程 (Enter 选择, r 刷新, Esc 返回) 当前: {} ",
+        app.course_name_display()
+    );
+    let block = Block::default().borders(Borders::ALL).title(title);
+    if app.courses.loading || app.courses.error.is_some() || app.courses.list.is_empty() {
+        let message = if app.courses.loading {
+            "正在获取课程列表…".to_string()
+        } else if let Some(e) = &app.courses.error {
+            format!("加载失败: {}", e)
+        } else {
+            "账号下暂无课程（需在线登录）".to_string()
+        };
+        let inner = Rect {
+            x: chunks[0].x + 1,
+            y: chunks[0].y + 1,
+            width: chunks[0].width.saturating_sub(2),
+            height: chunks[0].height.saturating_sub(2),
+        };
+        f.render_widget(block, chunks[0]);
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(45),
+                Constraint::Length(1),
+                Constraint::Percentage(45),
+            ])
+            .split(inner);
+        f.render_widget(
+            Paragraph::new(message)
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::DarkGray)),
+            rows[1],
+        );
+    } else {
+        let inner = Rect {
+            x: chunks[0].x + 1,
+            y: chunks[0].y + 1,
+            width: chunks[0].width.saturating_sub(2),
+            height: chunks[0].height.saturating_sub(2),
+        };
+        let inner_h = inner.height as usize;
+        let len = app.courses.list.len();
+        let offset = app
+            .courses
+            .cursor
+            .saturating_sub(inner_h / 2)
+            .min(len.saturating_sub(inner_h));
+        let current_course = current.clone();
+        let cursor = app.courses.cursor;
+        let lines: Vec<Line> = app
+            .courses
+            .list
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i >= offset && *i < offset + inner_h)
+            .map(|(i, c)| {
+                let mark = if c.course_id == current_course {
+                    "*"
+                } else {
+                    " "
+                };
+                let text = format!("{} [{}] {}  {}", mark, i + 1, c.name, c.course_id);
+                let style = if i == cursor {
+                    Style::default()
+                        .bg(Color::Blue)
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD)
+                } else if c.course_id == current_course {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default()
+                };
+                Line::from(Span::styled(text, style))
+            })
+            .collect();
+        f.render_widget(Paragraph::new(lines).block(block), chunks[0]);
+        if len > inner_h {
+            let mut sb = ScrollbarState::new(len).position(cursor);
+            f.render_stateful_widget(
+                Scrollbar::new(ScrollbarOrientation::VerticalRight),
+                chunks[0],
+                &mut sb,
+            );
+        }
+    }
+    render_footer(
+        f,
+        app,
+        chunks[1],
+        &[
+            (ButtonId::Back, "Esc 返回"),
+            (ButtonId::Quit, "q 退出"),
+        ],
+        14,
+    );
+}
+
 fn render_preview(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -565,7 +670,8 @@ fn render_help(f: &mut Frame) {
         Line::from("R / A        运行本单元 / 全课程"),
         Line::from("p / g        预览选中任务（库内数据） / 生成讨论草稿（需确认）"),
         Line::from("u            预览页：重新抓取当前任务并更新入库"),
-        Line::from("d            dump-text 总览与导出（导出后自动刷新）"),
+        Line::from("c            选择课程（账号下课程列表，Enter 确认）"),
+        Line::from("D            dump-text 总览与导出（导出后自动刷新）"),
         Line::from("s / w       设置 / 保存配置"),
         Line::from("r / q        刷新 / 退出（运行中 Esc 取消）"),
         Line::from("鼠标：点击选择/按钮，滚轮滚动列表与日志"),
@@ -734,6 +840,18 @@ mod tests {
             loading: false,
         });
         draw(&mut app);
+
+        app.screen = Screen::Courses;
+        app.courses.list = vec![crate::api::course::HomeCourse {
+            name: "测试课程".into(),
+            course_id: "course-v2:x+nhce_v4_rw_3+20230116".into(),
+            class_id: "1".into(),
+            curricula_id: "2".into(),
+        }];
+        app.courses.cursor = 0;
+        let text = compact(&render_text(&mut app));
+        assert!(text.contains("测试课程"), "text:\n{}", text);
+        assert!(text.contains("选择课程"), "text:\n{}", text);
 
         app.screen = Screen::Help;
         draw(&mut app);

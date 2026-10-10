@@ -53,13 +53,14 @@ pub async fn run_dump_text(
     if opts.force {
         db::clear_all(&conn)?;
     }
+    let course_id = session.course_id().to_string();
 
     // 记录课程信息（meta），供 TUI 离线显示课程名；单任务重抓时跳过
     if opts.group_ids.is_empty() {
-        let cid = session.course_id().to_string();
         let name = crate::api::course::course_display_name(session, session.course_id()).await;
-        let _ = db::save_meta(&conn, "course_id", &cid);
+        let _ = db::save_meta(&conn, "course_id", &course_id);
         let _ = db::save_meta(&conn, "course_name", &name);
+        let _ = db::save_meta(&conn, &format!("course_name:{}", course_id), &name);
     }
 
     if opts.with_names {
@@ -113,10 +114,10 @@ pub async fn run_dump_text(
             let passed = leaf.state.pass >= 1;
 
             // 已入库：仅刷新状态（状态未变不写库），不重新抓题；
-            // 旧库缺少 raw_json 时重新抓取补全
+            // 旧库缺少 raw_json / course_id 不匹配时重新抓取补全
             if !only_mode
                 && db::task_exists(&conn, uid, gid)?
-                && !db::task_needs_json(&conn, uid, gid)?
+                && !db::task_needs_refresh(&conn, uid, gid, &course_id)?
             {
                 summary.skipped += 1;
                 let changed = db::task_status(&conn, uid, gid)?
@@ -207,6 +208,7 @@ pub async fn run_dump_text(
                         passed,
                         raw_content: raw,
                         raw_json: None,
+                        course_id: &course_id,
                         group: None,
                         vocab: &[],
                         media: &[],
@@ -270,6 +272,7 @@ pub async fn run_dump_text(
                     passed,
                     raw_content: None,
                     raw_json: raw_json.as_deref(),
+                    course_id: &course_id,
                     group: Some(&group),
                     vocab: &vocab,
                     media: &media,
@@ -287,6 +290,6 @@ pub async fn run_dump_text(
         }
     }
 
-    summary.total_files = db::task_count(&conn)?;
+    summary.total_files = db::task_count(&conn, &course_id)?;
     Ok(summary)
 }

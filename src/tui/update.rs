@@ -131,6 +131,43 @@ impl App {
                     self.push_log(Level::Error, format!("生成草稿失败: {}", e));
                 }
             },
+            AppEvent::CoursesLoaded(res) => {
+                self.courses.loading = false;
+                match res {
+                    Ok(list) => {
+                        let cur = self.session.course_id().to_string();
+                        self.courses.cursor = list
+                            .iter()
+                            .position(|c| c.course_id == cur)
+                            .unwrap_or(0);
+                        self.courses.error = None;
+                        self.courses.list = list;
+                        self.status = format!("共 {} 门课程", self.courses.list.len());
+                    }
+                    Err(e) => {
+                        self.courses.error = Some(e.clone());
+                        self.status = format!("课程列表加载失败: {}", e);
+                        self.push_log(Level::Error, format!("课程列表加载失败: {}", e));
+                    }
+                }
+            }
+            AppEvent::SessionReady(session, res) => {
+                self.session = *session;
+                match res {
+                    Ok(true) => {
+                        self.status = "已自动登录/刷新凭证".into();
+                        self.push_log(Level::Info, "登录凭证已自动刷新".into());
+                        self.spawn_load_tree(tx);
+                    }
+                    Ok(false) => {
+                        self.status = "登录凭证仍有效".into();
+                    }
+                    Err(e) => {
+                        self.status = format!("自动登录失败: {}", e);
+                        self.push_log(Level::Error, format!("自动登录失败: {}", e));
+                    }
+                }
+            }
             AppEvent::ConfigSaved(res) => {
                 if let Err(e) = res {
                     self.push_log(Level::Error, format!("保存配置失败: {}", e));
@@ -274,6 +311,7 @@ impl App {
         match self.screen {
             Screen::Dump => self.handle_dump_key(k, tx),
             Screen::Preview => self.handle_preview_key(k, tx),
+            Screen::Courses => self.handle_courses_key(k, tx),
             _ => self.handle_dashboard_key(k, tx),
         }
     }
@@ -300,6 +338,7 @@ impl App {
                 self.spawn_load_dump(tx);
             }
             KeyCode::Char('p') => self.spawn_preview(tx),
+            KeyCode::Char('c') => self.open_courses(tx),
             KeyCode::Char('r') => self.refresh(tx),
             KeyCode::Char('R') => self.run_unit(tx),
             KeyCode::Char('A') => self.run_all(tx),
@@ -374,6 +413,67 @@ impl App {
             }
             KeyCode::Char('u') => self.spawn_dump_task(tx),
             _ => {}
+        }
+    }
+
+    fn handle_courses_key(&mut self, k: KeyEvent, tx: &UnboundedSender<AppEvent>) {
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Dashboard,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.courses.cursor = self.courses.cursor.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if !self.courses.list.is_empty() {
+                    self.courses.cursor = (self.courses.cursor + 1).min(self.courses.list.len() - 1);
+                }
+            }
+            KeyCode::Char('r') => self.spawn_load_courses(tx),
+            KeyCode::Enter => self.select_course(tx),
+            _ => {}
+        }
+    }
+
+    /// 选择当前光标课程：写入 config 并重新加载任务树。
+    fn select_course(&mut self, tx: &UnboundedSender<AppEvent>) {
+        let Some(c) = self.courses.list.get(self.courses.cursor).cloned() else {
+            self.status = "无课程可选".into();
+            return;
+        };
+        let mut cfg = self.session.cfg().clone();
+        let old_class = cfg.class_id.clone();
+        cfg.course_id = c.course_id.clone();
+        if !c.class_id.is_empty() {
+            cfg.class_id = c.class_id.clone();
+        }
+        if !c.curricula_id.is_empty() {
+            cfg.curricula_id = c.curricula_id.clone();
+        } else if old_class != cfg.class_id {
+            // 列表异常未返回 curricula_id：换课程时清空旧值避免用错
+            if !cfg.curricula_id.is_empty() {
+                self.push_log(
+                    Level::Warn,
+                    "课程列表未返回 curricula_id，已清空旧值；讨论题需手动填写".into(),
+                );
+            }
+            cfg.curricula_id.clear();
+        }
+        match self.session.update_config(cfg) {
+            Ok(()) => {
+                if let Ok(conn) = crate::db::open() {
+                    let _ =
+                        crate::db::save_meta(&conn, &format!("course_name:{}", c.course_id), &c.name);
+                }
+                self.status = format!("已选择课程: {}", c.name);
+                self.screen = Screen::Dashboard;
+                self.spawn_load_tree(tx);
+                self.spawn_load_dump(tx);
+                // 课程变化后尝试刷新登录/课程名缓存
+                self.spawn_ensure_login(tx);
+            }
+            Err(e) => {
+                self.status = format!("保存课程失败: {:#}", e);
+                self.push_log(Level::Error, format!("保存课程失败: {:#}", e));
+            }
         }
     }
 
@@ -519,13 +619,18 @@ impl App {
         self.log_auto = self.log_scroll + 1 >= self.logs.len();
     }
 
-    /// 按当前界面滚动对应面板（Dump/Preview/日志）。
+    /// 按当前界面滚动对应面板（Dump/Preview/Courses/日志）。
     fn scroll_current(&mut self, delta: i32) {
         if self.screen == Screen::Dump {
             self.dump_scroll = (self.dump_scroll as i32 + delta).max(0) as usize;
         } else if self.screen == Screen::Preview {
             if let Some(pv) = self.preview.as_mut() {
                 pv.scroll = (pv.scroll as i32 + delta).max(0) as usize;
+            }
+        } else if self.screen == Screen::Courses {
+            self.courses.cursor = (self.courses.cursor as i32 + delta).max(0) as usize;
+            if !self.courses.list.is_empty() {
+                self.courses.cursor = self.courses.cursor.min(self.courses.list.len() - 1);
             }
         } else {
             self.scroll_logs(delta);
@@ -550,6 +655,8 @@ impl App {
                                 if let Some(pv) = self.preview.as_mut() {
                                     pv.scroll = pv.scroll.saturating_sub(3);
                                 }
+                            } else if self.screen == Screen::Courses {
+                                self.courses.cursor = self.courses.cursor.saturating_sub(3);
                             } else {
                                 self.scroll_logs(-3);
                             }
@@ -575,6 +682,11 @@ impl App {
                             } else if self.screen == Screen::Preview {
                                 if let Some(pv) = self.preview.as_mut() {
                                     pv.scroll += 3;
+                                }
+                            } else if self.screen == Screen::Courses {
+                                if !self.courses.list.is_empty() {
+                                    self.courses.cursor =
+                                        (self.courses.cursor + 3).min(self.courses.list.len() - 1);
                                 }
                             } else {
                                 self.scroll_logs(3);

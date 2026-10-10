@@ -77,19 +77,7 @@ pub fn jwt_exp(token: &str) -> Option<i64> {
     v.get("exp").and_then(|e| e.as_i64())
 }
 
-/// BBS 可用 JWT 候选：config 的 authorization 与 cookie 中的 jwt 去重后按 exp 从新到旧。
-fn auth_candidates(authorization: &str, cookie_jwt: Option<&str>) -> Vec<String> {
-    let mut list: Vec<String> = Vec::new();
-    for t in [authorization, cookie_jwt.unwrap_or("")] {
-        if !t.is_empty() && !list.iter().any(|x| x == t) {
-            list.push(t.to_string());
-        }
-    }
-    list.sort_by_key(|t| std::cmp::Reverse(jwt_exp(t).unwrap_or(0)));
-    list
-}
-
-/// 统一的 BBS 请求：自动选择 exp 最新的 JWT，401 时换另一个候选重试。
+/// 统一的 BBS 请求：自动选择 exp 最新的 JWT，401 时换另一个候选重试；全部失败后自动刷新登录再试。
 async fn post_bbs(
     session: &Session,
     url: &str,
@@ -97,31 +85,44 @@ async fn post_bbs(
     allow_duplicate: bool,
 ) -> Result<Value> {
     let body = serde_json::to_string(payload).context("序列化 BBS 请求失败")?;
-    let cfg = session.cfg();
-    let cookie_jwt = cfg.cookie_jwt();
-    let candidates = auth_candidates(&cfg.authorization, cookie_jwt.as_deref());
-    if candidates.is_empty() {
-        bail!("无可用 JWT：请在 config.json 填写 cookie（含 jwt=）或 authorization");
-    }
     let mut last_status = reqwest::StatusCode::UNAUTHORIZED;
     let mut last_body = String::new();
-    for (i, auth) in candidates.iter().enumerate() {
-        let (status, text) = session.post_raw_with_auth(url, &body, Some(auth)).await?;
-        if status.is_success() {
-            return parse_bbs_response(&text, allow_duplicate);
+    let mut refreshed = false;
+    loop {
+        let candidates = session.jwt_candidates();
+        if candidates.is_empty() {
+            if !refreshed && session.refresh_auth().await.unwrap_or(false) {
+                refreshed = true;
+                continue;
+            }
+            bail!("无可用 JWT：请在 config.json 填写 username/password（推荐）或 cookie（含 jwt=）");
         }
-        last_status = status;
-        last_body = text;
-        if status == reqwest::StatusCode::UNAUTHORIZED && i + 1 < candidates.len() {
-            log::warn!("BBS 请求 401，改用另一个 JWT 重试");
-            continue;
+        for (i, auth) in candidates.iter().enumerate() {
+            let (status, text) = session.post_raw_with_auth(url, &body, Some(auth)).await?;
+            if status.is_success() {
+                return parse_bbs_response(&text, allow_duplicate);
+            }
+            last_status = status;
+            last_body = text;
+            if status == reqwest::StatusCode::UNAUTHORIZED && i + 1 < candidates.len() {
+                log::warn!("BBS 请求 401，改用另一个 JWT 重试");
+                continue;
+            }
+            break;
+        }
+        if last_status == reqwest::StatusCode::UNAUTHORIZED && !refreshed {
+            log::warn!("BBS 全部 JWT 均 401，尝试自动刷新登录后重试");
+            if session.refresh_auth().await.unwrap_or(false) {
+                refreshed = true;
+                continue;
+            }
         }
         break;
     }
     if last_status == reqwest::StatusCode::UNAUTHORIZED {
         bail!(
-            "BBS 接口 401：cookie 中的 jwt 与 authorization 均不可用（过期或无权限），\
-             请重新从浏览器复制 cookie（推荐）或 authorization。响应: {}",
+            "BBS 接口 401：JWT 均不可用（过期或无权限），\
+             请填写 username/password 以自动登录，或重新从浏览器复制 cookie。响应: {}",
             crate::api::parser::truncate_text(&last_body, 150)
         );
     }
@@ -323,28 +324,5 @@ mod tests {
         assert_eq!(jwt_exp(&token), Some(4102444800));
         assert_eq!(jwt_exp("not-a-jwt"), None);
         assert_eq!(jwt_exp(""), None);
-    }
-
-    #[test]
-    fn auth_candidates_prefers_newer() {
-        let stale = make_jwt(1000);
-        let fresh = make_jwt(2000);
-        // config authorization 过期更早 → cookie jwt 排前
-        let list = auth_candidates(&stale, Some(&fresh));
-        assert_eq!(list, vec![fresh.clone(), stale.clone()]);
-        // 两者相同 → 去重
-        let list = auth_candidates(&fresh, Some(&fresh));
-        assert_eq!(list, vec![fresh.clone()]);
-        // 只有 config authorization
-        let list = auth_candidates(&stale, None);
-        assert_eq!(list, vec![stale.clone()]);
-        // 只有 cookie jwt（推荐用法：config 无 authorization）
-        let list = auth_candidates("", Some(&fresh));
-        assert_eq!(list, vec![fresh.clone()]);
-        // 都无法解析 exp → 保持原顺序
-        let list = auth_candidates("a.b.c", Some("d.e.f"));
-        assert_eq!(list.len(), 2);
-        // 全空
-        assert!(auth_candidates("", None).is_empty());
     }
 }

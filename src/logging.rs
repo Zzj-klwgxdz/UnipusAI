@@ -3,6 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use time::PrimitiveDateTime;
 use time::macros::format_description;
@@ -11,6 +12,24 @@ use time::macros::format_description;
 pub const LOG_DIR: &str = "logs";
 const FILE_PREFIX: &str = "unipus-";
 const RETENTION_HOURS: i64 = 72;
+
+/// TUI 是否正在运行（用于屏蔽第三方库的 stdout/stderr 直接输出，避免破坏界面）。
+static TUI_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// 标记 TUI 已启动。
+pub fn set_tui_active() {
+    TUI_ACTIVE.store(true, Ordering::Relaxed);
+}
+
+/// 取消 TUI 标记（测试用）。
+pub fn reset_tui_active() {
+    TUI_ACTIVE.store(false, Ordering::Relaxed);
+}
+
+/// 当前是否运行在 TUI 中。
+pub fn tui_active() -> bool {
+    TUI_ACTIVE.load(Ordering::Relaxed)
+}
 
 /// 当前时间：本地时间；受限环境（如多线程 Linux 无法安全取本地偏移）回退 UTC。
 /// 返回 (时间, 是否为本地时间)。

@@ -19,6 +19,8 @@ use crate::logging::RunLog;
 
 /// 启动交互式 TUI（无参数或 `--tui`）。
 pub async fn run_tui(session: Session, log: Option<std::sync::Arc<RunLog>>) -> Result<()> {
+    // 标记 TUI 模式：第三方库（如 whisper-candle）会直接打印 stdout/stderr，需静默
+    crate::logging::set_tui_active();
     let mut stdout = std::io::stdout();
     enable_raw_mode()?;
     if let Err(e) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
@@ -43,8 +45,14 @@ pub async fn run_tui(session: Session, log: Option<std::sync::Arc<RunLog>>) -> R
     }
     events::spawn_input_thread(tx.clone());
 
+    let need_course = session.course_id().is_empty();
     let mut app = App::new(session);
-    app.spawn_load_tree(&tx);
+    if need_course {
+        // 未选择课程：直接打开课程选择界面
+        app.open_courses(&tx);
+    } else {
+        app.spawn_load_tree(&tx);
+    }
 
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(200));
     let result: Result<()> = loop {

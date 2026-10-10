@@ -19,6 +19,7 @@ pub enum Screen {
     Settings,
     Dump,
     Preview,
+    Courses,
     Help,
 }
 
@@ -100,6 +101,8 @@ pub const FIELDS: &[FieldDef] = &[
     FieldDef { label: "whisper_enabled", kind: FieldKind::Bool },
     FieldDef { label: "whisper_model", kind: FieldKind::OptionStr },
     FieldDef { label: "whisper_language", kind: FieldKind::OptionStr },
+    FieldDef { label: "username", kind: FieldKind::Text },
+    FieldDef { label: "password", kind: FieldKind::Secret },
 ];
 
 /// 设置界面状态。
@@ -149,6 +152,8 @@ impl SettingsState {
             18 => c.whisper_enabled.to_string(),
             19 => c.whisper_model.clone(),
             20 => c.whisper_language.clone(),
+            21 => c.username.clone(),
+            22 => c.password.clone(),
             _ => String::new(),
         }
     }
@@ -177,6 +182,8 @@ impl SettingsState {
             18 => c.whisper_enabled = v.trim() == "true",
             19 => c.whisper_model = v.to_string(),
             20 => c.whisper_language = v.to_string(),
+            21 => c.username = v.trim().to_string(),
+            22 => c.password = v.to_string(),
             _ => {}
         }
     }
@@ -192,6 +199,15 @@ pub struct PreviewState {
     pub scroll: usize,
     pub draft: Option<String>,
     pub loading: bool,
+}
+
+/// 课程选择界面状态。
+#[derive(Debug, Default)]
+pub struct CoursesState {
+    pub list: Vec<crate::api::course::HomeCourse>,
+    pub cursor: usize,
+    pub loading: bool,
+    pub error: Option<String>,
 }
 
 /// 确认弹窗动作。
@@ -257,6 +273,10 @@ pub enum AppEvent {
     DumpDone(Result<DumpSummary, String>),
     PreviewDone(Result<(String, Preview), String>),
     DraftDone(Result<String, String>),
+    /// 课程列表加载完成
+    CoursesLoaded(Result<Vec<crate::api::course::HomeCourse>, String>),
+    /// 后台登录/刷新完成（回填 Session 与结果）
+    SessionReady(Box<Session>, Result<bool, String>),
     ConfigSaved(Result<(), String>),
     Status(String),
     Tick,
@@ -282,6 +302,7 @@ pub struct App {
     pub dump_missing: bool,
     pub dump_loading: bool,
     pub preview: Option<PreviewState>,
+    pub courses: CoursesState,
     pub confirm: Option<Confirm>,
     pub status: String,
     pub mouse_map: Vec<(ratatui::layout::Rect, MouseAction)>,
@@ -311,6 +332,7 @@ impl App {
             dump_missing: false,
             dump_loading: false,
             preview: None,
+            courses: CoursesState::default(),
             confirm: None,
             status: String::new(),
             mouse_map: Vec::new(),
@@ -381,18 +403,20 @@ impl App {
         }))
     }
 
-    /// 从数据库加载课程单元与任务树（后台）。
+    /// 从数据库加载当前课程的单元与任务树（后台）。
     pub fn spawn_load_tree(&mut self, tx: &UnboundedSender<AppEvent>) {
         if self.loading_tree {
             return;
         }
         self.loading_tree = true;
+        let course_id = self.session.course_id().to_string();
         let tx = tx.clone();
         tokio::spawn(async move {
             let res = (|| -> anyhow::Result<(Option<String>, Vec<UnitUi>)> {
                 let conn = db::open()?;
-                let name = db::get_meta(&conn, "course_name")?;
-                let units = db::load_tree(&conn)?
+                let name = db::get_meta(&conn, &format!("course_name:{}", course_id))?
+                    .or(db::get_meta(&conn, "course_name")?);
+                let units = db::load_tree(&conn, &course_id)?
                     .into_iter()
                     .map(|u| {
                         let uid = u.unit_id;
@@ -547,12 +571,13 @@ impl App {
         });
     }
 
-    /// 读取 dump 汇总文本（区分"尚无数据"与读取错误）。
+    /// 读取当前课程的 dump 汇总文本（区分"尚无数据"与读取错误）。
     pub fn spawn_load_dump(&mut self, tx: &UnboundedSender<AppEvent>) {
         self.dump_loading = true;
+        let course_id = self.session.course_id().to_string();
         let tx = tx.clone();
         tokio::spawn(async move {
-            let ev = match crate::dump::summary_text() {
+            let ev = match crate::dump::summary_text(&course_id) {
                 Ok(Some(text)) => AppEvent::DumpText(Ok(text)),
                 Ok(None) => AppEvent::DumpMissing,
                 Err(e) => {
@@ -561,6 +586,42 @@ impl App {
                 }
             };
             let _ = tx.send(ev);
+        });
+    }
+
+    /// 打开课程选择界面并加载课程列表。
+    pub fn open_courses(&mut self, tx: &UnboundedSender<AppEvent>) {
+        self.screen = Screen::Courses;
+        self.spawn_load_courses(tx);
+    }
+
+    /// 拉取账号课程列表（后台）。
+    pub fn spawn_load_courses(&mut self, tx: &UnboundedSender<AppEvent>) {
+        self.courses.loading = true;
+        self.courses.error = None;
+        let session = self.session.clone();
+        let tx2 = tx.clone();
+        tokio::spawn(async move {
+            let r = crate::api::course::fetch_home_courses(&session)
+                .await
+                .map_err(|e| format!("{:#}", e));
+            let _ = tx2.send(AppEvent::CoursesLoaded(r));
+        });
+    }
+
+    /// 后台确保登录有效并刷新课程字段，完成后回填 Session。
+    pub fn spawn_ensure_login(&mut self, tx: &UnboundedSender<AppEvent>) {
+        let mut s2 = self.session.clone();
+        let tx2 = tx.clone();
+        tokio::spawn(async move {
+            let r = async {
+                let a = crate::api::login::ensure_login(&mut s2).await?;
+                let b = crate::api::login::ensure_profile(&mut s2).await?;
+                Ok::<bool, anyhow::Error>(a || b)
+            }
+            .await
+            .map_err(|e| format!("{:#}", e));
+            let _ = tx2.send(AppEvent::SessionReady(Box::new(s2), r));
         });
     }
 
@@ -678,6 +739,8 @@ impl App {
                 self.settings.msg = Some("已保存并重建会话".into());
                 self.status = "配置已保存".into();
                 let _ = tx.send(AppEvent::ConfigSaved(Ok(())));
+                // 账号密码等变更后，后台尝试自动登录刷新凭证
+                self.spawn_ensure_login(tx);
             }
             Err(e) => {
                 let msg = format!("保存失败: {:#}", e);

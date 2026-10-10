@@ -44,10 +44,10 @@ pub fn db_path() -> std::path::PathBuf {
     crate::db::db_path()
 }
 
-/// 实时生成 dump 汇总文本（空库返回 None）。
-pub fn summary_text() -> Result<Option<String>> {
+/// 实时生成指定课程的 dump 汇总文本（空库返回 None）。
+pub fn summary_text(course_id: &str) -> Result<Option<String>> {
     let conn = crate::db::open()?;
-    crate::db::summary_text(&conn)
+    crate::db::summary_text(&conn, course_id)
 }
 
 /// 将任务完成情况同步到数据库（供 run/group 提交成功后调用）；
