@@ -39,21 +39,26 @@ pub fn sanitize_dir_name(s: &str) -> String {
         .collect()
 }
 
-/// SQLite 数据库路径（dump_text/dump.db）。
+/// 默认数据库路径（未登录/旧版）。
 pub fn db_path() -> std::path::PathBuf {
     crate::db::db_path()
 }
 
-/// 实时生成指定课程的 dump 汇总文本（空库返回 None）。
-pub fn summary_text(course_id: &str) -> Result<Option<String>> {
-    let conn = crate::db::open()?;
+/// 当前账号的数据库路径。
+pub fn db_path_for(open_id: &str) -> std::path::PathBuf {
+    crate::db::db_path_for(open_id)
+}
+
+/// 实时生成指定账号+课程的 dump 汇总文本（空库返回 None）。
+pub fn summary_text(open_id: &str, course_id: &str) -> Result<Option<String>> {
+    let conn = crate::db::open_for(open_id)?;
     crate::db::summary_text(&conn, course_id)
 }
 
-/// 将任务完成情况同步到数据库（供 run/group 提交成功后调用）；
+/// 将任务完成情况同步到当前账号数据库（供 run/group 提交成功后调用）；
 /// 数据库中无该任务返回 false。
-pub fn sync_task_status(task: &GroupTask, passed: bool) -> bool {
-    match crate::db::open() {
+pub fn sync_task_status(session: &crate::api::session::Session, task: &GroupTask, passed: bool) -> bool {
+    match crate::db::open_for(&session.open_id()) {
         Ok(conn) => {
             crate::db::set_passed(&conn, &task.unit_id, &task.group_id, passed).unwrap_or(false)
         }

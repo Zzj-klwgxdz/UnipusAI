@@ -271,14 +271,19 @@ async fn cmd_annotator(session: &mut Session, args: &[String]) -> Result<()> {
 async fn cmd_courses(session: &Session) -> Result<()> {
     let list = UnipusAI::api::course::fetch_home_courses(session).await?;
     if list.is_empty() {
-        println!("未查询到课程（账号下暂无课程）");
+        println!("未查询到课程（账号下暂无课程；请确认已加入班级/激活教材）");
         return Ok(());
     }
     let current = session.course_id();
     println!("共 {} 门课程：", list.len());
     for (i, c) in list.iter().enumerate() {
         let mark = if c.course_id == current { "*" } else { " " };
-        println!("{} [{}] {}  {}", mark, i + 1, c.name, c.course_id);
+        let tag = if c.group_label.is_empty() {
+            String::new()
+        } else {
+            format!("[{}]", c.group_label)
+        };
+        println!("{} [{}]{} {}  {}", mark, i + 1, tag, c.name, c.course_id);
     }
     if current.is_empty() {
         println!("\n当前未选择课程：运行 `UnipusAI course <序号>` 选择");
@@ -304,7 +309,12 @@ async fn cmd_course(session: &mut Session, args: &[String]) -> Result<()> {
         }
         for (i, c) in list.iter().enumerate() {
             let mark = if c.course_id == cur { "*" } else { " " };
-            println!("{} [{}] {}  {}", mark, i + 1, c.name, c.course_id);
+            let tag = if c.group_label.is_empty() {
+                String::new()
+            } else {
+                format!("[{}]", c.group_label)
+            };
+            println!("{} [{}]{} {}  {}", mark, i + 1, tag, c.name, c.course_id);
         }
         return Ok(());
     }
@@ -337,10 +347,22 @@ async fn cmd_course(session: &mut Session, args: &[String]) -> Result<()> {
     }
     session.update_config(cfg)?;
     // 缓存课程名，供 TUI 离线显示
-    if let Ok(conn) = UnipusAI::db::open() {
+    if let Ok(conn) = UnipusAI::db::open_for(&session.open_id()) {
         let _ = UnipusAI::db::save_meta(&conn, &format!("course_name:{}", c.course_id), &c.name);
     }
-    println!("已选择课程: {}  {}", c.name, c.course_id);
+    println!(
+        "已选择课程: {}{}  {}",
+        if c.group_label.is_empty() {
+            String::new()
+        } else {
+            format!("[{}] ", c.group_label)
+        },
+        c.name,
+        c.course_id
+    );
+    if c.class_id.is_empty() {
+        println!("提示：未获取到班级信息，讨论题不可用；其余功能正常");
+    }
     Ok(())
 }
 
@@ -447,7 +469,7 @@ async fn cmd_dump_text(session: &Session, unit_ids: &[String]) -> Result<()> {
         "本次新生成: 模块 {} 个, 题目 {} 道, 媒体转写 {} 条, 共 {} 字符",
         s.modules, s.questions, s.media, s.media_chars
     );
-    println!("数据已保存到 {}", UnipusAI::dump::db_path().display());
+    println!("数据已保存到 {}", UnipusAI::db::db_path_for(&session.open_id()).display());
     Ok(())
 }
 
@@ -581,7 +603,7 @@ async fn cmd_group(session: &Session, args: &[String]) -> Result<()> {
             "[SKIP] {} 已通过，跳过作答与提交（--force 可强制重做）",
             group_id
         );
-        UnipusAI::dump::sync_task_status(&task, true);
+        UnipusAI::dump::sync_task_status(session, &task, true);
         return Ok(());
     }
     let reporter = UnipusAI::reporter::PrintReporter;
@@ -736,7 +758,7 @@ fn print_help() {
         r#"UnipusAI - U校园 AI 版刷课脚本
 
 用法:
-  UnipusAI                    启动交互式 TUI（推荐；任务/预览来自 dump_text/dump.db，含课程浏览/运行/导出/设置；p 预览、D 导出）
+  UnipusAI                    启动交互式 TUI（推荐；任务/预览来自当前账号的 dump_text/dump-<open_id>.db，含课程浏览/运行/导出/设置；p 预览、D 导出）
   UnipusAI <命令> [参数]      命令行模式（见下方命令）
 
 命令:
@@ -761,7 +783,7 @@ fn print_help() {
       测试媒体转写链路（下载 -> ffmpeg -> whisper）
 
   dump-text [--names] [--force] [unitId...]
-      导出题目文本与媒体转写到 SQLite 数据库 dump_text/dump.db（不答题）
+      导出题目文本与媒体转写到当前账号的 SQLite 数据库 dump_text/dump-<open_id>.db（不答题；多账号隔离）
       保存单元索引/题型/必修/完成情况/模块/答题说明/材料文本/媒体转写/选项等全部内容
       所有叶子全量导出；浏览类页面（内容为空/非 JSON/无题目模块）按 view-only 保存原始内容
       run/group 答题完成后自动同步状态；--force 清空数据库并重新生成
@@ -770,7 +792,7 @@ fn print_help() {
       查看登录状态（jwt/refresh_token 有效期）；--force 用账号密码强制重新登录
 
   courses
-      列出账号下全部课程（* 标记当前选择）
+      列出账号下全部课程（* 标记当前选择；首页列表为空时自动改用"我的教材"）
 
   course [序号|courseId]
       查看或选择当前课程（写入 config.json，所有命令共用）

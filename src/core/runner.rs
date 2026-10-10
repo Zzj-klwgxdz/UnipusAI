@@ -65,8 +65,8 @@ pub async fn process_group(
         tab_type: task.tab_type.clone(),
     });
     let resp = process_group_inner(session, task, reporter, cancel).await?;
-    // 答题成功后同步 dump 文件首行状态（无 dump 文件则忽略）
-    if crate::dump::sync_task_status(task, true) {
+    // 答题成功后同步 dump 状态（无对应记录则忽略）
+    if crate::dump::sync_task_status(session, task, true) {
         log::debug!("dump 状态已更新: {} -> 已完成", task.group_id);
     }
     reporter.report(ReportEvent::TaskDone {
@@ -265,7 +265,7 @@ pub async fn run_course_units(
             if task.passed {
                 summary.skipped += 1;
                 // 跳过已通过任务时也同步 dump 状态（可能是旧状态未更新）
-                crate::dump::sync_task_status(task, true);
+                crate::dump::sync_task_status(session, task, true);
                 reporter.report(ReportEvent::TaskSkipped {
                     group_id: task.group_id.clone(),
                     reason: "已通过".to_string(),

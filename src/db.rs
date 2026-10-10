@@ -8,9 +8,19 @@ use std::path::{Path, PathBuf};
 /// 数据库文件名（位于 dump_text 目录下）。
 pub const DB_FILE: &str = "dump.db";
 
-/// SQLite 数据库完整路径。
+/// 默认（未登录/旧版）数据库完整路径。
 pub fn db_path() -> PathBuf {
     Path::new(DUMP_DIR).join(DB_FILE)
+}
+
+/// 按账号返回数据库路径：`dump_text/dump-<open_id>.db`；
+/// open_id 为空（未登录/离线）时回退旧 `dump_text/dump.db`。
+pub fn db_path_for(open_id: &str) -> PathBuf {
+    if open_id.is_empty() {
+        db_path()
+    } else {
+        Path::new(DUMP_DIR).join(format!("dump-{}.db", open_id))
+    }
 }
 
 /// 建表语句（幂等）。
@@ -85,13 +95,22 @@ CREATE INDEX IF NOT EXISTS idx_tasks_unit       ON tasks(course_id, unit_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_course     ON tasks(course_id, unit_index);
 "#;
 
-/// 打开（必要时创建）数据库并初始化 schema。
+/// 打开（必要时创建）默认数据库并初始化 schema（未登录/旧版路径）。
 pub fn open() -> Result<Connection> {
-    let path = db_path();
+    open_path(&db_path())
+}
+
+/// 按账号打开（必要时创建）数据库并初始化 schema。
+pub fn open_for(open_id: &str) -> Result<Connection> {
+    open_path(&db_path_for(open_id))
+}
+
+/// 打开指定路径的数据库并初始化 schema。
+pub fn open_path(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let conn = Connection::open(&path)
+    let conn = Connection::open(path)
         .with_context(|| format!("打开数据库 {} 失败", path.display()))?;
     init(&conn)?;
     Ok(conn)
@@ -644,7 +663,11 @@ pub fn summary_text(conn: &Connection, course_id: &str) -> Result<Option<String>
         total_opt_done,
         total_opt - total_opt_done
     ));
-    out.push_str(&format!("\n数据库: {}\n", db_path().display()));
+    let db_display = conn
+        .path()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| db_path().display().to_string());
+    out.push_str(&format!("\n数据库: {}\n", db_display));
     out.push_str("\n按单元:\n");
     for ((idx, uid), (r, rd, o, od)) in &units {
         out.push_str(&format!(
@@ -917,6 +940,38 @@ mod tests {
         // meta 表同时可用
         save_meta(&c, "k", "v").unwrap();
         assert_eq!(get_meta(&c, "k").unwrap().as_deref(), Some("v"));
+    }
+
+    #[test]
+    fn db_path_per_account() {
+        assert_eq!(db_path_for("").file_name().unwrap(), "dump.db");
+        assert_eq!(db_path_for("abc123").file_name().unwrap(), "dump-abc123.db");
+        assert!(db_path_for("abc123").starts_with(DUMP_DIR));
+    }
+
+    #[test]
+    fn two_db_files_isolated() {
+        let dir = std::env::temp_dir().join(format!("unipus_db_iso_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p1 = dir.join("acct-a.db");
+        let p2 = dir.join("acct-b.db");
+        for p in [&p1, &p2] {
+            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_file(p.with_extension("db-wal"));
+            let _ = std::fs::remove_file(p.with_extension("db-shm"));
+        }
+        let mut c1 = open_path(&p1).unwrap();
+        let group = ParsedGroup {
+            modules: vec![module("basic")],
+        };
+        save_task(&mut c1, &input(&group, &[], &[])).unwrap();
+        let c2 = open_path(&p2).unwrap();
+        assert_eq!(task_count(&c1, "course-x").unwrap(), 1);
+        assert_eq!(task_count(&c2, "course-x").unwrap(), 0, "双文件必须互相隔离");
+        assert!(load_tree(&c2, "course-x").unwrap().is_empty());
+        drop(c1);
+        drop(c2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

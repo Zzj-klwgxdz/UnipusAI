@@ -31,10 +31,16 @@ fn auth_from_cfg(cfg: &Config) -> AuthState {
     } else {
         cfg.cookie.clone()
     };
+    // config 缺 open_id 时从 jwt 声明兜底（手动清理过 config 的场景）
+    let open_id = if cfg.open_id.is_empty() {
+        login::jwt_open_id(&jwt).unwrap_or_default()
+    } else {
+        cfg.open_id.clone()
+    };
     AuthState {
         jwt,
         cookie,
-        open_id: cfg.open_id.clone(),
+        open_id,
         refresh_token: cfg.refresh_token.clone(),
         jwt_expire: cfg.jwt_expire,
         rt_expire: cfg.rt_expire,

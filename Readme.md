@@ -19,7 +19,7 @@
 - **单词卡/朗读练习**：vocabulary 题型无需作答，自动标记完成；`debug`/`dump-text` 可查看单词表。
 - **限频自动重试**：提交命中服务端"操作过于频繁"时，自动等待冷却（递增 180s，最多 5 次）后重试。
 - **本地语音/视频转写**：对无内嵌字幕的音频/视频模块，用 ffmpeg + Whisper 本地转写后作答，不依赖在线语音识别服务。
-- **SQLite 数据归档**：`dump-text` 把课程全部内容存入 `dump_text/dump.db`（单元索引/题型/必修/完成情况/模块/答题说明/材料/字幕/媒体转写/选项等），dump 或 run/group 答题后自动更新状态。
+- **SQLite 数据归档**：`dump-text` 把课程全部内容存入 `dump_text/dump-<open_id>.db`（**每个账号一个库**，单元索引/题型/必修/完成情况/模块/答题说明/材料/字幕/媒体转写/选项等），dump 或 run/group 答题后自动更新状态。
 
 ## 示例图片
 ![tui](./imgs/tui.png)
@@ -64,7 +64,7 @@ src/
 │   ├── submit.rs      # 构造提交/标记已看 payload 并上报
 │   └── user_module.rs # 用户作答记录查询（预留）
 ├── dump.rs            # dump 数据目录/题型名/数据库路径与状态同步入口
-├── db.rs              # SQLite（dump_text/dump.db）：schema、任务/模块/题目/媒体/单词入库与汇总查询
+├── db.rs              # SQLite（每账号 dump_text/dump-<open_id>.db）：schema、任务/模块/题目/媒体/单词入库与汇总查询
 ├── tui/               # ratatui 交互界面
 │   ├── mod.rs         # 终端初始化/事件循环/退出恢复
 │   ├── app.rs         # AppState + 后台任务（加载/运行/导出/预览/保存）
@@ -308,7 +308,7 @@ export HF_ENDPOINT=https://hf-mirror.com
 | ←/→ `h/l` | 折叠 / 展开单元 |
 | Enter | 单元行=展开；任务行=运行（已通过需 `f` 强制） |
 | `f` / `R` / `A` | 强制运行选中任务 / 运行本单元 / 运行全课程 |
-| `p` / `D` | 预览选中任务（只读，不提交，内容来自本地数据库） / dump-text 总览与导出 |
+| `p` / `d` | 预览选中任务（只读，不提交，内容来自本地数据库） / dump-text 总览与导出 |
 | `c` | 选择课程（账号下课程列表，Enter 确认后写回配置并刷新任务树） |
 | `u` | 预览页：重新抓取当前任务并更新入库（完成后自动刷新预览与任务树） |
 | `g` | 预览页生成讨论草稿（调用 LLM 前弹窗确认） |
@@ -316,14 +316,14 @@ export HF_ENDPOINT=https://hf-mirror.com
 | `r` / `q` / `Esc` | 刷新任务树（重读数据库） / 退出 / 运行中取消（再按返回上级） |
 | 鼠标 | 点击单元与任务、底栏按钮；滚轮滚动树/日志/清单 |
 
-> TUI 的**任务树与预览全部来自本地数据库** `dump_text/dump.db`（不再联网加载，可离线浏览）；空库时提示按 `D` 导出。`D` 页增量/全量导出完成后会自动刷新任务树与已打开的预览；预览页 `u` 只重抓当前任务。未选择课程时启动会直接打开课程选择页。底栏会显示最近一次操作状态。
+> TUI 的**任务树与预览全部来自当前账号的本地数据库** `dump_text/dump-<open_id>.db`（多账号隔离，不再联网加载，可离线浏览）；空库时提示按 `d` 导出。`d` 页增量/全量导出完成后会自动刷新任务树与已打开的预览；预览页 `u` 只重抓当前任务。未选择课程时启动会直接打开课程选择页。底栏会显示最近一次操作状态。
 
 #### 命令一览
 
 | 命令 | 说明 |
 | --- | --- |
 | `login [--force]` | 查看登录状态（jwt/refresh_token 有效期）；`--force` 用账号密码强制重新登录 |
-| `courses` | 列出账号下全部课程（`*` 标记当前选择） |
+| `courses` | 列出账号下全部课程（`*` 标记当前选择）；首页课程列表为空时自动改用"我的教材"（班级课程/个人学习） |
 | `course [序号\|courseId]` | 查看或选择当前课程（写入 config.json，所有命令共用） |
 | `annotator [--extract]` | 查看 x-annotator-auth-token 签发参数与剩余有效期；`--extract` 强制从前端 bundle 重新提取参数并重签 |
 | `progress [--names]` | 打印课程全部单元/任务树（按 `learning_strategy` 过滤） |
@@ -332,7 +332,7 @@ export HF_ENDPOINT=https://hf-mirror.com
 | `debug <groupId> [--force]` | 本地求解指定任务组（不提交，用于调试；讨论题显示完整草稿与讨论区状态，单词卡显示词表）；已通过任务默认只做解析预览（不调用 LLM），`--force` 强制生成 |
 | `test-types` | 每种题型抽一题测试答题链路（不提交） |
 | `transcribe <url>` | 测试媒体转写链路（下载 → ffmpeg → whisper） |
-| `dump-text [--names] [--force] [unitId...]` | 抓取全部题目与媒体转写（不答题）存入 SQLite `dump_text/dump.db`；所有叶子全量导出、浏览类页面按 `view-only` 保存原始内容；入库含必修/完成状态（`run`/`group` 完成后自动同步），汇总在 TUI dump 页实时查看 |
+| `dump-text [--names] [--force] [unitId...]` | 抓取全部题目与媒体转写（不答题）存入当前账号的 SQLite `dump_text/dump-<open_id>.db`；所有叶子全量导出、浏览类页面按 `view-only` 保存原始内容；入库含必修/完成状态（`run`/`group` 完成后自动同步），汇总在 TUI dump 页实时查看 |
 
 #### 参数说明
 
@@ -346,18 +346,18 @@ export HF_ENDPOINT=https://hf-mirror.com
 ### 转写与文本导出
 
 - `transcribe <url>` 可对任意媒体 URL 单独验证转写链路，结果按 URL 缓存。
-- `dump-text` 遍历全课程（或指定单元），把**所有叶子全量**写入 SQLite 数据库 `dump_text/dump.db`（可被任意 SQLite 客户端打开查询）；题型名取 `reply_type`（空则回退 `module_type`）；内容为空/非 JSON/无题目模块的**浏览类页面**按 `view-only` 保存原始内容全文。
+- `dump-text` 遍历全课程（或指定单元），把**所有叶子全量**写入当前账号的 SQLite 数据库 `dump_text/dump-<open_id>.db`（可被任意 SQLite 客户端打开查询；未登录时回退旧 `dump.db`）；题型名取 `reply_type`（空则回退 `module_type`）；内容为空/非 JSON/无题目模块的**浏览类页面**按 `view-only` 保存原始内容全文。多账号数据完全隔离（每个账号独立文件），旧版单文件 `dump.db` 保留原样（如需归属旧账号可手动改名为 `dump-<旧open_id>.db`）。
   - 入库字段：任务表保存单元索引/单元 id/单元名/任务组 id/tab 类型/题型/kind/**必修**/**完成情况**/**课程 id（多课程隔离）**/原始内容/**解密原文 JSON**/更新时间；模块表保存模块类型/replyType/instanceId/**答题说明**/**材料文本**/**内嵌字幕**/词库；媒体表保存 URL 与**转写全文**（失败保存错误信息）；题目表保存回答类型/题目类型/题干/**完整选项**；单词表保存单词与发音链接；`meta` 表保存课程 id 与各课程名（TUI 离线显示用）——全部存全文，不截断。TUI 任务树与 dump 汇总只显示当前选中课程。
   - 已入库的任务组再次运行时只刷新状态、不重新抓题（旧库缺少 `raw_json` 时会自动重新抓取补全一次）；缺失的才抓取生成（含媒体转写，按 URL 缓存）。
   - `run`/`group` 答题提交成功后自动把对应任务更新为"已完成"；浏览类页面（task 叶子）在作答时也会直接走"标记已看"提交。
-  - TUI 的任务树与预览（`p`）全部从该库加载：任务树含单元/题型/必修/完成状态；预览含解密原文 JSON、答题说明、材料、字幕、媒体转写、单词卡与题干选项。空库时提示按 `D` 导出。
-  - TUI 的 dump 页（按 `D`）实时汇总：更新时间、必修/选修完成统计、按单元统计、带状态的任务清单；导出完成后自动刷新任务树与已打开的预览；预览页按 `u` 可只重抓当前任务并更新入库。
+  - TUI 的任务树与预览（`p`）全部从该库加载：任务树含单元/题型/必修/完成状态；预览含解密原文 JSON、答题说明、材料、字幕、媒体转写、单词卡与题干选项。空库时提示按 `d` 导出。
+  - TUI 的 dump 页（按 `d`）实时汇总：更新时间、必修/选修完成统计、按单元统计、带状态的任务清单；导出完成后自动刷新任务树与已打开的预览；预览页按 `u` 可只重抓当前任务并更新入库。
 
 查询示例（需要 sqlite3 命令行，或用任意 SQLite GUI 打开）：
 
 ```bash
-sqlite3 dump_text/dump.db "SELECT unit_index, group_id, group_type, required, passed FROM tasks ORDER BY unit_index"
-sqlite3 dump_text/dump.db "SELECT question_text, options_json FROM questions LIMIT 5"
+sqlite3 "dump_text/dump-<open_id>.db" "SELECT unit_index, group_id, group_type, required, passed FROM tasks ORDER BY unit_index"
+sqlite3 "dump_text/dump-<open_id>.db" "SELECT question_text, options_json FROM questions LIMIT 5"
 ```
 
 ## 测试
@@ -416,6 +416,9 @@ cargo test
 - 数据库 `tasks` 新增 `course_id` 列并按课程隔离（TUI 任务树/dump 汇总只显示当前课程，旧数据按 meta 自动回填）
 - `x_annotator_auth_token` 改为**本地自动签发**（前端同算法/同密钥的 HS256 JWT，1 年有效，剩余 <30 天自动续签）——至此凭证类字段全部无需手动填写
 - annotator 签名参数改为**按需从 ucontent 前端 bundle 动态提取**（仅 token 需重签或请求 401 时触发），密钥/iss/aud/TTL 轮换后可自动自愈；401 处理升级为"jwt 刷新 → annotator 重提取重签 → 提示手动兜底"阶梯；新增 `annotator [--extract]` 命令查看/强制重提取
+- 课程列表新增"我的教材"兜底：部分账号 `getHomeCourseListByStudent` 返回空（已实测），此时自动改用 `/api/cmgt/course/my/bookshelf` 列出班级课程/个人学习条目（含 classId/curriculaId），`courses` 与 TUI 选课均标注来源
+- **多账号数据隔离**：数据库改为每账号一个文件 `dump_text/dump-<open_id>.db`（未登录回退旧 `dump.db`），任务/状态/汇总/预览全部按当前账号读写，修复"换账号后进度被识别为旧账号"的问题；旧 `dump.db` 保留原样，可手动改名归属旧账号；`--force` 仅清空当前账号的库
+- TUI 主界面底栏新增 `c 课程` 按钮（与快捷键 `c` 等效，支持鼠标点击），按钮宽度调整为每键 12 列；帮助与 Readme 键位同步为 `d` 导出
 
 
 

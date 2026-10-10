@@ -54,6 +54,7 @@ fn render_dashboard(f: &mut Frame, app: &mut App) {
         &[
             (ButtonId::CancelRun, "Esc 取消"),
             (ButtonId::Dump, "d 导出"),
+            (ButtonId::Courses, "c 课程"),
             (ButtonId::Quit, "q 退出"),
         ]
     } else {
@@ -62,6 +63,7 @@ fn render_dashboard(f: &mut Frame, app: &mut App) {
             (ButtonId::RunUnit, "R 本单元"),
             (ButtonId::RunAll, "A 全课程"),
             (ButtonId::Preview, "p 预览"),
+            (ButtonId::Courses, "c 课程"),
             (ButtonId::Dump, "d 导出"),
             (ButtonId::Settings, "s 设置"),
             (ButtonId::Refresh, "r 刷新"),
@@ -69,7 +71,7 @@ fn render_dashboard(f: &mut Frame, app: &mut App) {
             (ButtonId::Quit, "q 退出"),
         ]
     };
-    render_footer(f, app, chunks[3], buttons, 14);
+    render_footer(f, app, chunks[3], buttons, 12);
 }
 
 fn render_top(f: &mut Frame, app: &App, area: Rect, running: bool) {
@@ -460,7 +462,7 @@ fn render_dump(f: &mut Frame, app: &mut App) {
         let message = if app.dump_missing {
             "尚无 dump 数据：按 Enter 导出（F 全量重建）"
         } else {
-            "正在读取 dump_text/dump.db …"
+            "正在读取本地 dump 数据库 …"
         };
         let inner = Rect {
             x: chunks[0].x + 1,
@@ -574,7 +576,12 @@ fn render_courses(f: &mut Frame, app: &mut App) {
                 } else {
                     " "
                 };
-                let text = format!("{} [{}] {}  {}", mark, i + 1, c.name, c.course_id);
+                let tag = if c.group_label.is_empty() {
+                    String::new()
+                } else {
+                    format!("[{}]", c.group_label)
+                };
+                let text = format!("{} [{}]{} {}  {}", mark, i + 1, tag, c.name, c.course_id);
                 let style = if i == cursor {
                     Style::default()
                         .bg(Color::Blue)
@@ -671,7 +678,7 @@ fn render_help(f: &mut Frame) {
         Line::from("p / g        预览选中任务（库内数据） / 生成讨论草稿（需确认）"),
         Line::from("u            预览页：重新抓取当前任务并更新入库"),
         Line::from("c            选择课程（账号下课程列表，Enter 确认）"),
-        Line::from("D            dump-text 总览与导出（导出后自动刷新）"),
+        Line::from("d            dump-text 总览与导出（导出后自动刷新）"),
         Line::from("s / w       设置 / 保存配置"),
         Line::from("r / q        刷新 / 退出（运行中 Esc 取消）"),
         Line::from("鼠标：点击选择/按钮，滚轮滚动列表与日志"),
@@ -847,6 +854,7 @@ mod tests {
             course_id: "course-v2:x+nhce_v4_rw_3+20230116".into(),
             class_id: "1".into(),
             curricula_id: "2".into(),
+            group_label: "班级课程".into(),
         }];
         app.courses.cursor = 0;
         let text = compact(&render_text(&mut app));
@@ -923,6 +931,13 @@ mod tests {
         app.status = "测试状态：已请求取消".into();
         let text = compact(&render_text(&mut app));
         assert!(text.contains("测试状态"), "text:\n{}", text);
+    }
+
+    #[test]
+    fn dashboard_footer_has_courses_button() {
+        let mut app = test_app();
+        let text = compact(&render_text(&mut app));
+        assert!(text.contains("c课程"), "底栏应包含 c 课程 按钮:\n{}", text);
     }
 
     #[test]

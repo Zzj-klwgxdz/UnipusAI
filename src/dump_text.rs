@@ -49,7 +49,8 @@ pub async fn run_dump_text(
     reporter: &dyn Reporter,
     cancel: &CancellationToken,
 ) -> Result<DumpSummary> {
-    let mut conn = db::open()?;
+    let open_id = session.open_id();
+    let mut conn = db::open_for(&open_id)?;
     if opts.force {
         db::clear_all(&conn)?;
     }
@@ -86,7 +87,7 @@ pub async fn run_dump_text(
         units: units.len(),
         ..Default::default()
     };
-    let db_path = dump::db_path().display().to_string();
+    let db_path = dump::db_path_for(&open_id).display().to_string();
 
     'units: for (ui, uid) in units.iter().enumerate() {
         if cancel.is_cancelled() {

@@ -218,6 +218,8 @@ pub struct HomeCourse {
     pub class_id: String,
     /// 课程组 id（courseList[].id），即页面 URL 的 cloudCurriculaId。
     pub curricula_id: String,
+    /// 来源标签（首页列表为空时来自"我的教材"：班级课程/个人学习），首页列表为空字符串。
+    pub group_label: String,
 }
 
 /// 解析首页课程列表响应（抽出便于单测）。
@@ -267,13 +269,14 @@ pub fn parse_home_courses(v: &serde_json::Value) -> Vec<HomeCourse> {
                 course_id,
                 class_id: class_id.clone(),
                 curricula_id: curricula_id.clone(),
+                group_label: String::new(),
             });
         }
     }
     out
 }
 
-/// 拉取当前账号的全部课程。
+/// 拉取当前账号的全部课程：优先首页课程列表；为空时回退"我的教材"（书架）。
 pub async fn fetch_home_courses(session: &Session) -> Result<Vec<HomeCourse>> {
     let body = session
         .get_bytes(HOME_COURSE_LIST_URL)
@@ -291,7 +294,113 @@ pub async fn fetch_home_courses(session: &Session) -> Result<Vec<HomeCourse>> {
         );
     }
     log::debug!("课程列表原始响应: {}", crate::api::parser::truncate_text(&body, 4000));
-    Ok(parse_home_courses(&v))
+    let list = parse_home_courses(&v);
+    if !list.is_empty() {
+        return Ok(list);
+    }
+    // 首页列表为空（部分账号服务端不返回）：改用"我的教材"兜底
+    let bookshelf = fetch_bookshelf_courses(session).await?;
+    if bookshelf.is_empty() {
+        log::warn!("首页课程列表与我的教材均为空（账号可能未加入班级/激活教材）");
+    } else {
+        log::info!(
+            "首页课程列表为空，改用我的教材列表（{} 门）",
+            bookshelf.len()
+        );
+    }
+    Ok(bookshelf)
+}
+
+/// "我的教材"接口（首页课程列表为空时的兜底来源）。
+const BOOKSHELF_URL: &str = "https://uai.unipus.cn/api/cmgt/course/my/bookshelf";
+
+/// 拉取并解析"我的教材"中的课程（班级课程 + 个人学习，跳过已过期）。
+pub async fn fetch_bookshelf_courses(session: &Session) -> Result<Vec<HomeCourse>> {
+    let body = session
+        .get_bytes(BOOKSHELF_URL)
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .map_err(|e| anyhow::anyhow!("获取我的教材失败: {:#}", e))?;
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| anyhow::anyhow!("我的教材响应非 JSON: {:#}", e))?;
+    let ok = v.get("code").and_then(|c| c.as_i64()) == Some(1)
+        || v.get("success").and_then(|s| s.as_bool()) == Some(true);
+    if !ok {
+        anyhow::bail!(
+            "我的教材接口返回异常: {}",
+            crate::api::parser::truncate_text(&body, 200)
+        );
+    }
+    log::debug!("我的教材原始响应: {}", crate::api::parser::truncate_text(&body, 4000));
+    Ok(parse_bookshelf_courses(&v))
+}
+
+/// 解析"我的教材"响应：CLASS_COURSE（班级课程）优先，其次 PERSONAL（个人学习），
+/// 跳过 EXPIRED；按 course_id 去重（班级课程优先）。
+pub fn parse_bookshelf_courses(v: &serde_json::Value) -> Vec<HomeCourse> {
+    let mut out: Vec<HomeCourse> = Vec::new();
+    let Some(groups) = v.pointer("/value/groups").and_then(|g| g.as_object()) else {
+        return out;
+    };
+    // 固定顺序：班级课程 → 个人学习（EXPIRED 跳过）
+    for (key, label) in [
+        ("CLASS_COURSE", "班级课程"),
+        ("PERSONAL", "个人学习"),
+    ] {
+        let Some(items) = groups.get(key).and_then(|x| x.as_array()) else {
+            continue;
+        };
+        for item in items {
+            let course_id = item
+                .get("instanceId")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            if course_id.is_empty() {
+                continue;
+            }
+            let name = item
+                .get("name")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            // classCourses 实际为数组（可能多班级），取第一个；兼容对象形式
+            let (class_id, curricula_id) = item
+                .get("classCourses")
+                .and_then(|cc| match cc {
+                    serde_json::Value::Array(arr) => arr.first().cloned(),
+                    other => Some(other.clone()),
+                })
+                .map(|cc| {
+                    (
+                        cc.get("classId")
+                            .map(|x| match x {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            })
+                            .unwrap_or_default(),
+                        cc.get("courseId")
+                            .map(|x| match x {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            })
+                            .unwrap_or_default(),
+                    )
+                })
+                .unwrap_or_default();
+            if out.iter().any(|c| c.course_id == course_id) {
+                continue; // 班级课程优先，已存在则不覆盖
+            }
+            out.push(HomeCourse {
+                name,
+                course_id,
+                class_id,
+                curricula_id,
+                group_label: label.to_string(),
+            });
+        }
+    }
+    out
 }
 
 /// 账号信息接口（u-school 头所需学校编号）。
@@ -483,5 +592,53 @@ mod tests {
         assert_eq!(list[2].curricula_id, "888");
 
         assert!(parse_home_courses(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn parse_bookshelf_courses_orders_and_dedupes() {
+        // 结构摘自真实"我的教材"响应（账号：班级课程 1 门 + 个人 2 门 + 过期 0）
+        let v = serde_json::json!({
+            "code": 1,
+            "value": {
+                "groups": {
+                    "CLASS_COURSE": [{
+                        "resourceId": "course-v2:Unipus+nhce_v4_rw_3+20230116",
+                        "instanceId": "course-v2:75b7546e9012b72+nhce_v4_rw_3+20230116",
+                        "name": "新视野3(班级)",
+                        "activation": 0,
+                        "classCourses": [{"courseId": 369619, "classId": 1840882666005127252i64}]
+                    }],
+                    "PERSONAL": [
+                        {"instanceId": "course-v2:75b7546e9002b72+nhce_v4_rw_1+20230116", "name": "新视野1"},
+                        {"instanceId": "course-v2:75b7546ea002b72+nhce_v4_rw_2+20230116", "name": "新视野2"}
+                    ],
+                    "EXPIRED": [
+                        {"instanceId": "course-v2:old+nhce_v4_rw_0+20230116", "name": "过期课"}
+                    ]
+                }
+            }
+        });
+        let list = parse_bookshelf_courses(&v);
+        assert_eq!(list.len(), 3, "过期课程应跳过");
+        assert_eq!(list[0].group_label, "班级课程");
+        assert_eq!(list[0].class_id, "1840882666005127252");
+        assert_eq!(list[0].curricula_id, "369619");
+        assert_eq!(list[1].group_label, "个人学习");
+        assert!(list[1].class_id.is_empty());
+        assert!(!list.iter().any(|c| c.name == "过期课"));
+
+        // 同一课程同时出现在班级与个人组 → 班级优先、去重；classCourses 兼容对象形式
+        let v2 = serde_json::json!({
+            "value": {"groups": {
+                "CLASS_COURSE": [{"instanceId": "course-v2:x", "name": "班级", "classCourses": {"classId": "c1", "courseId": "k1"}}],
+                "PERSONAL": [{"instanceId": "course-v2:x", "name": "个人"}]
+            }}
+        });
+        let list2 = parse_bookshelf_courses(&v2);
+        assert_eq!(list2.len(), 1);
+        assert_eq!(list2[0].group_label, "班级课程");
+        assert_eq!(list2[0].name, "班级");
+
+        assert!(parse_bookshelf_courses(&serde_json::json!({})).is_empty());
     }
 }

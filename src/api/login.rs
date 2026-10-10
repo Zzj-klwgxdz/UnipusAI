@@ -336,6 +336,14 @@ pub fn jwt_open_id(token: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// 读取 JWT 的 username 声明（用于检测 config 已切换账号）。
+pub fn jwt_username(token: &str) -> Option<String> {
+    jwt_payload(token)?
+        .get("username")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
 fn now_ts() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -483,15 +491,38 @@ pub fn apply(cfg: &mut Config, c: &Credentials) {
 
 /// 确保会话凭证有效：>24h 直接用；否则 refresh_token 刷新；再否则账号密码登录。
 /// 有更新时写回 config.json，返回是否发生了变化。
+/// config 中已切换账号的判定：配置了 username 且与 jwt.username 不一致。
+pub fn account_switched(cfg: &Config) -> bool {
+    cfg.cookie_jwt()
+        .and_then(|j| jwt_username(&j))
+        .map(|u| !cfg.username.is_empty() && u != cfg.username)
+        .unwrap_or(false)
+}
+
 pub async fn ensure_login(session: &mut crate::api::session::Session) -> Result<bool> {
     let cfg = session.cfg().clone();
-    // 新鲜的 jwt 优先（cookie 中的 jwt）
-    if let Some(jwt) = cfg.cookie_jwt()
+    // 检测 config 是否已切换到其它账号（jwt.username 与配置用户名不一致）
+    let switched = account_switched(&cfg);
+    if switched {
+        log::info!(
+            "检测到 config 账号已切换（{} -> {}），重新登录",
+            cfg.cookie_jwt()
+                .and_then(|j| jwt_username(&j))
+                .unwrap_or_default(),
+            cfg.username
+        );
+    }
+    // 新鲜的 jwt 优先（cookie 中的 jwt）；账号已切换时不复用
+    if !switched
+        && let Some(jwt) = cfg.cookie_jwt()
         && jwt_fresh_enough(&jwt)
     {
         return Ok(false);
     }
-    if !cfg.refresh_token.is_empty() && (cfg.rt_expire == 0 || cfg.rt_expire > now_ts()) {
+    if !switched
+        && !cfg.refresh_token.is_empty()
+        && (cfg.rt_expire == 0 || cfg.rt_expire > now_ts())
+    {
         match refresh(&cfg.refresh_token).await {
             Ok(c) => {
                 log::info!("已用 refresh_token 刷新登录（jwt 至 {}）", fmt_ts(c.jwt_expire));
@@ -540,6 +571,15 @@ pub async fn ensure_profile(session: &mut crate::api::session::Session) -> Resul
     use crate::api::course;
     let mut cfg = session.cfg().clone();
     let mut changed = false;
+
+    // config 缺 open_id 时用当前会话补齐（jwt 声明/登录态）
+    if cfg.open_id.is_empty() {
+        let live = session.open_id();
+        if !live.is_empty() {
+            cfg.open_id = live;
+            changed = true;
+        }
+    }
 
     // x_annotator_auth_token：本地签发；需重签时按需从 bundle 提取参数（仅此场景有网络开销）
     if cfg.open_id.is_empty() {
@@ -698,6 +738,29 @@ mod tests {
                 "question-data-e421babb.js".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn account_switch_detection() {
+        use base64::Engine;
+        let mk = |u: &str| {
+            let p = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(serde_json::json!({"username": u, "openId": "o"}).to_string());
+            format!("x.{}.y", p)
+        };
+        let mut cfg = Config {
+            username: "111".into(),
+            cookie: format!("jwt={}", mk("111")),
+            ..Default::default()
+        };
+        assert!(!account_switched(&cfg));
+        cfg.cookie = format!("jwt={}", mk("222"));
+        assert!(account_switched(&cfg), "用户名与 jwt 不一致应判定为已切换");
+        cfg.username.clear();
+        assert!(!account_switched(&cfg), "未配置用户名时不判定");
+        cfg.username = "222".into();
+        cfg.cookie = "jwt=not-a-jwt".into();
+        assert!(!account_switched(&cfg), "无法解析 jwt 时不判定");
     }
 
     #[test]

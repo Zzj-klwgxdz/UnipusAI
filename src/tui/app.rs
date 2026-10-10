@@ -241,6 +241,7 @@ pub enum ButtonId {
     RunUnit,
     RunAll,
     Preview,
+    Courses,
     Dump,
     DumpForce,
     Settings,
@@ -266,7 +267,7 @@ pub enum AppEvent {
     /// (课程名, 单元任务树) —— 全部来自数据库
     TreeLoaded(Result<(Option<String>, Vec<UnitUi>), String>),
     Report(ReportEvent),
-    /// dump_text/dump.db 实时汇总内容
+    /// 当前账号 dump 数据库的实时汇总内容
     DumpText(Result<String, String>),
     /// dump 数据尚不存在
     DumpMissing,
@@ -410,10 +411,11 @@ impl App {
         }
         self.loading_tree = true;
         let course_id = self.session.course_id().to_string();
+        let open_id = self.session.open_id();
         let tx = tx.clone();
         tokio::spawn(async move {
             let res = (|| -> anyhow::Result<(Option<String>, Vec<UnitUi>)> {
-                let conn = db::open()?;
+                let conn = db::open_for(&open_id)?;
                 let name = db::get_meta(&conn, &format!("course_name:{}", course_id))?
                     .or(db::get_meta(&conn, "course_name")?);
                 let units = db::load_tree(&conn, &course_id)?
@@ -571,17 +573,22 @@ impl App {
         });
     }
 
-    /// 读取当前课程的 dump 汇总文本（区分"尚无数据"与读取错误）。
+    /// 读取当前账号+课程的 dump 汇总文本（区分"尚无数据"与读取错误）。
     pub fn spawn_load_dump(&mut self, tx: &UnboundedSender<AppEvent>) {
         self.dump_loading = true;
         let course_id = self.session.course_id().to_string();
+        let open_id = self.session.open_id();
         let tx = tx.clone();
         tokio::spawn(async move {
-            let ev = match crate::dump::summary_text(&course_id) {
+            let ev = match crate::dump::summary_text(&open_id, &course_id) {
                 Ok(Some(text)) => AppEvent::DumpText(Ok(text)),
                 Ok(None) => AppEvent::DumpMissing,
                 Err(e) => {
-                    let msg = format!("读取 {} 失败: {:#}", crate::dump::db_path().display(), e);
+                    let msg = format!(
+                        "读取 {} 失败: {:#}",
+                        crate::dump::db_path_for(&open_id).display(),
+                        e
+                    );
                     AppEvent::DumpText(Err(msg))
                 }
             };
@@ -660,9 +667,10 @@ impl App {
     }
 
     fn load_preview(&self, tx: &UnboundedSender<AppEvent>, gid: String) {
+        let open_id = self.session.open_id();
         let tx2 = tx.clone();
         tokio::spawn(async move {
-            let ev = match crate::preview::load_preview_from_db(&gid) {
+            let ev = match crate::preview::load_preview_from_db(&open_id, &gid) {
                 Ok(Some(p)) => AppEvent::PreviewDone(Ok((gid, p))),
                 Ok(None) => AppEvent::PreviewDone(Err("库中无该任务数据（预览页 u 可重抓）".into())),
                 Err(e) => AppEvent::PreviewDone(Err(format!("{:#}", e))),
@@ -705,10 +713,11 @@ impl App {
     /// 生成讨论草稿（调用 LLM，需确认；数据来自数据库）。
     pub fn spawn_draft(&mut self, tx: &UnboundedSender<AppEvent>, gid: String) {
         let session = self.session.clone();
+        let open_id = self.session.open_id();
         let tx2 = tx.clone();
         tokio::spawn(async move {
             let r = async {
-                let preview = crate::preview::load_preview_from_db(&gid)?
+                let preview = crate::preview::load_preview_from_db(&open_id, &gid)?
                     .ok_or_else(|| anyhow::anyhow!("库中无该任务数据，请先重新 dump"))?;
                 let group = preview
                     .group

@@ -51,9 +51,9 @@ pub async fn load_preview(session: &Session, group_id: &str) -> Result<Preview> 
     }
 }
 
-/// 从数据库读取任务组预览（TUI 用）；库中无该任务返回 None。
-pub fn load_preview_from_db(group_id: &str) -> Result<Option<Preview>> {
-    let conn = crate::db::open()?;
+/// 从当前账号数据库读取任务组预览（TUI 用）；库中无该任务返回 None。
+pub fn load_preview_from_db(open_id: &str, group_id: &str) -> Result<Option<Preview>> {
+    let conn = crate::db::open_for(open_id)?;
     let Some(st) = crate::db::load_stored(&conn, group_id)? else {
         return Ok(None);
     };

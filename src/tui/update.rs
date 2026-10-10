@@ -459,7 +459,7 @@ impl App {
         }
         match self.session.update_config(cfg) {
             Ok(()) => {
-                if let Ok(conn) = crate::db::open() {
+                if let Ok(conn) = crate::db::open_for(&self.session.open_id()) {
                     let _ =
                         crate::db::save_meta(&conn, &format!("course_name:{}", c.course_id), &c.name);
                 }
@@ -742,6 +742,7 @@ impl App {
             ButtonId::RunUnit => self.run_unit(tx),
             ButtonId::RunAll => self.run_all(tx),
             ButtonId::Preview => self.spawn_preview(tx),
+            ButtonId::Courses => self.open_courses(tx),
             ButtonId::Dump => {
                 self.screen = Screen::Dump;
                 self.spawn_load_dump(tx);
