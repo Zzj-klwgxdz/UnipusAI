@@ -1,7 +1,7 @@
-# UnipusAI —— U校园 AI 版刷课脚本
+# UnipusAI —— U校园AI版刷课程序
 
-本项目是原 Python + Selenium 版（v2.4）的 **Rust 完全重写版**：
-不需要浏览器、不需要 WebDriver，原生 HTTP 实现，更轻量、更快、更稳定
+本项目和原 Python版（v2.4）U校园AI版刷课脚本是同一个仓库，但是推翻了Selenium浏览器自动化方案，改为**Rust HTTP请求方案**：
+不需要浏览器、不需要 WebDriver，原生 HTTP 实现，终端CLI或TUI界面支持跨平台，tokio异步，更轻量、更快、更稳定
 > 原 Python 版本（`Unipus_v2.4.py`、`AudioRecognizer.py`、`EnvironmentChecker.py` 等）已归档到v2.4分支。
 ### 如想用浏览器自动化方案请看[v2.4分支（bug较多）](https://github.com/Zzj-klwgxdz/UnipusAI/tree/v2.4)或者[这个（更推荐）](https://github.com/YSJohnson/UnipusAI-Helper),这个项目继承了原python版本的主要功能，并优化了用户体验
 ### 该项目在测试阶段，可能存在诸多问题，欢迎各位到issue留言
@@ -11,7 +11,7 @@
 ## 主要功能
 
 - **运行日志**：每次运行在 `logs/` 生成独立日志文件（本地时间命名，如 `unipus-20261009-214732.log`），启动时自动清理 3 天前的旧日志；CLI 与 TUI 均记录。
-- **纯命令行工具**：提供 `progress` / `run` / `group` / `debug` / `test-types` / `transcribe` / `dump-text` 等命令，方便调试与验证。
+- **纯CLI工具**：提供 `progress` / `run` / `group` / `debug` / `test-types` / `transcribe` / `dump-text` 等命令，方便调试与验证。
 - **交互式 TUI**：直接运行 `UnipusAI`（无参数）进入终端界面：浏览课程/单元/任务、运行与取消、dump 总览与导出、配置编辑，支持鼠标（ratatui）；任务树与预览全部来自本地数据库，可离线浏览，支持单任务重抓。
 - **全自动刷课**：遍历课程全部单元/任务组，自动解析并作答提交，跳过已通过的章节。
 - **AI 答题**：接入任意 OpenAI 兼容接口，覆盖选择、填空、简答等常见题型。
@@ -34,12 +34,16 @@
 
 | 组件 | 用途 |
 | --- | --- |
-| Rust (edition 2024) | 主语言，Tokio 异步运行时 |
-| reqwest | HTTP 客户端（rustls、cookie、gzip/brotli） |
-| aes / ecb / hex | 题目内容 AES-128-ECB 解密 |
+| Rust (edition 2024) + Tokio | 主语言与异步运行时 |
+| reqwest | HTTP 客户端（rustls、cookie、gzip/brotli/deflate、http2） |
+| aes / cbc / ecb / hex | 题目内容 AES-128-ECB 解密；SSO 登录账密 AES-128-CBC 加密 |
+| hmac / sha2 | annotator token 本地签发（HS256 JWT） |
+| base64 / sha1 / rand | JWT 编解码、媒体转写缓存键、随机作答 |
 | serde / serde_json | 配置与接口数据序列化 |
-| Whisper (whisper-candle-core) | 本地语音转写 |
-| FFmpeg | 媒体转 wav 前处理 |
+| rusqlite（bundled SQLite） | 课程任务/状态归档 |
+| ratatui / crossterm | 交互式 TUI：界面渲染与终端事件 |
+| whisper-candle-core / candle-core | 本地语音转写 |
+| FFmpeg | 媒体转 16k 单声道 wav 前处理 |
 
 ## 项目结构
 

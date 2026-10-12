@@ -707,11 +707,11 @@ async fn cmd_progress(session: &Session, args: &[String]) -> Result<()> {
         for t in &unit.tasks {
             println!(
                 "{:6} {:15} required={:<5} pass={} {}",
-                t.tab_type,
+                t.tab_type.green(),
                 t.group_id,
                 t.required,
                 t.passed,
-                if t.passed { "✔" } else { "" }
+                if t.passed { "✔".green() } else { "✗".red() }
             );
         }
     }
