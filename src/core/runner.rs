@@ -309,6 +309,8 @@ pub async fn mock_task(session: &Session, group_id: &str) -> Result<GroupTask> {
         let rt = fetch_unit(session, &unit_id).await?;
         for (gid, leaf) in &rt.leafs {
             if gid == group_id {
+                let strategies = leaf.strategies.clone().unwrap_or_default();
+                let state = leaf.state.unwrap_or_default();
                 return Ok(GroupTask {
                     group_id: group_id.to_string(),
                     unit_id,
@@ -317,11 +319,11 @@ pub async fn mock_task(session: &Session, group_id: &str) -> Result<GroupTask> {
                     } else {
                         leaf.tab_type.clone()
                     },
-                    required: leaf.strategies.required,
-                    passed: leaf.state.pass >= 1,
-                    min_score_pct: leaf.strategies.min_score_pct.unwrap_or(0),
-                    start_time: leaf.strategies.start_time.unwrap_or(0),
-                    end_time: leaf.strategies.end_time.unwrap_or(0),
+                    required: strategies.required,
+                    passed: state.pass >= 1,
+                    min_score_pct: strategies.min_score_pct.unwrap_or(0),
+                    start_time: strategies.start_time.unwrap_or(0),
+                    end_time: strategies.end_time.unwrap_or(0),
                 });
             }
         }

@@ -111,8 +111,12 @@ pub async fn run_dump_text(
             if only_mode && !opts.group_ids.contains(gid) {
                 continue;
             }
-            let required = leaf.strategies.required;
-            let passed = leaf.state.pass >= 1;
+            let required = leaf
+                .strategies
+                .as_ref()
+                .map(|s| s.required)
+                .unwrap_or(false);
+            let passed = leaf.state.map(|s| s.pass >= 1).unwrap_or(false);
 
             // 已入库：仅刷新状态（状态未变不写库），不重新抓题；
             // 旧库缺少 raw_json / course_id 不匹配时重新抓取补全

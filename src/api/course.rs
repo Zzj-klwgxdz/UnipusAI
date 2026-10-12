@@ -1,18 +1,11 @@
+use crate::api::serde_util::{
+    null_default, tolerant_i64, tolerant_opt_i32, tolerant_opt_i64, tolerant_string, tolerant_u8,
+};
 use crate::api::session::{Session, progress_url, unit_progress_url};
 use anyhow::Result;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
-
-/// 反序列化兜底：字段缺失或显式 `null` 时使用类型默认值。
-/// （`#[serde(default)]` 只处理缺失，不处理服务端返回的显式 null）
-fn null_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de> + Default,
-{
-    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
-}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CourseProgressResponse {
@@ -23,13 +16,14 @@ pub struct CourseProgressResponse {
 pub struct CourseProgressRt {
     #[serde(default)]
     pub units: BTreeMap<String, CourseUnitEntry>,
-    #[serde(default, deserialize_with = "null_default")]
+    #[serde(default, deserialize_with = "tolerant_string")]
     pub publish_version: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CourseUnitEntry {
-    pub strategies: Strategies,
+    #[serde(default)]
+    pub strategies: Option<Strategies>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -39,53 +33,55 @@ pub struct ProgressResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProgressRt {
-    #[serde(default, deserialize_with = "null_default")]
+    #[serde(default, deserialize_with = "tolerant_i64")]
     pub duration_time: i64,
-    #[serde(default, deserialize_with = "null_default")]
+    #[serde(default, deserialize_with = "tolerant_string")]
     pub flag: String,
     #[serde(default)]
     pub leafs: BTreeMap<String, LeafEntry>,
     #[serde(default)]
     pub micros: BTreeMap<String, MicroEntry>,
-    #[serde(default, deserialize_with = "null_default")]
+    #[serde(default, deserialize_with = "tolerant_string")]
     pub open_id: String,
-    #[serde(default, deserialize_with = "null_default")]
+    #[serde(default, deserialize_with = "tolerant_string")]
     pub publish_version: String,
-    #[serde(default, rename = "tutorialId", deserialize_with = "null_default")]
+    #[serde(default, rename = "tutorialId", deserialize_with = "tolerant_string")]
     pub tutorial_id: String,
-    #[serde(default, deserialize_with = "null_default")]
+    #[serde(default, deserialize_with = "tolerant_string")]
     pub unit_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct LeafEntry {
-    #[serde(default, deserialize_with = "null_default")]
+    #[serde(default, deserialize_with = "tolerant_i64")]
     pub duration: i64,
-    pub state: LeafState,
-    pub strategies: Strategies,
     #[serde(default)]
+    pub state: Option<LeafState>,
+    #[serde(default)]
+    pub strategies: Option<Strategies>,
+    #[serde(default, deserialize_with = "tolerant_string")]
     pub tab_type: String,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
 pub struct LeafState {
-    #[serde(default, deserialize_with = "null_default")]
+    #[serde(default, deserialize_with = "tolerant_u8")]
     pub pass: u8,
-    #[serde(default, deserialize_with = "null_default")]
+    #[serde(default, deserialize_with = "tolerant_u8")]
     pub pass2: u8,
-    #[serde(default, deserialize_with = "null_default")]
+    #[serde(default, deserialize_with = "tolerant_u8")]
     pub perm: u8,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Strategies {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "tolerant_opt_i64")]
     pub end_time: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "tolerant_opt_i32")]
     pub min_score_pct: Option<i32>,
     #[serde(default, deserialize_with = "null_default")]
     pub required: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "tolerant_opt_i64")]
     pub start_time: Option<i64>,
     #[serde(default, deserialize_with = "null_default")]
     pub statistic_mode_out: bool,
@@ -93,8 +89,10 @@ pub struct Strategies {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MicroEntry {
-    pub state: LeafState,
-    pub strategies: Strategies,
+    #[serde(default)]
+    pub state: Option<LeafState>,
+    #[serde(default)]
+    pub strategies: Option<Strategies>,
 }
 
 #[derive(Debug, Clone)]
@@ -131,15 +129,17 @@ pub async fn fetch_course_units(session: &Session) -> Result<Vec<String>> {
 pub fn build_tasks(unit_id: &str, rt: &ProgressRt) -> Vec<GroupTask> {
     let mut tasks = Vec::new();
     for (gid, leaf) in &rt.leafs {
+        let strategies = leaf.strategies.clone().unwrap_or_default();
+        let state = leaf.state.unwrap_or_default();
         tasks.push(GroupTask {
             group_id: gid.clone(),
             unit_id: unit_id.to_string(),
             tab_type: leaf.tab_type.clone(),
-            required: leaf.strategies.required,
-            passed: leaf.state.pass >= 1,
-            min_score_pct: leaf.strategies.min_score_pct.unwrap_or(0),
-            start_time: leaf.strategies.start_time.unwrap_or(0),
-            end_time: leaf.strategies.end_time.unwrap_or(0),
+            required: strategies.required,
+            passed: state.pass >= 1,
+            min_score_pct: strategies.min_score_pct.unwrap_or(0),
+            start_time: strategies.start_time.unwrap_or(0),
+            end_time: strategies.end_time.unwrap_or(0),
         });
     }
     tasks.sort_by(|a, b| a.group_id.cmp(&b.group_id));
@@ -626,6 +626,72 @@ mod tests {
         let c: CourseProgressResponse =
             serde_json::from_value(cv).expect("null publish_version 应可解析");
         assert!(c.rt.publish_version.is_empty());
+    }
+
+    #[test]
+    fn progress_tolerates_float_string_and_null_structs() {
+        // 复现 issue #21：min_score_pct=0.75（浮点）、时间字符串、state/strategies 为 null
+        let v = serde_json::json!({
+            "rt": {
+                "leafs": {
+                    "g-float": {
+                        "duration": 120.5,
+                        "state": {"pass": 1.0, "pass2": 0.0, "perm": null},
+                        "strategies": {"end_time": 1791647999.6, "min_score_pct": 0.75, "required": true, "start_time": 1788710400.4},
+                        "tab_type": "video"
+                    },
+                    "g-string": {
+                        "state": {"pass": "1"},
+                        "strategies": {"end_time": "1791647999", "min_score_pct": "60", "required": true, "start_time": "1788710400"},
+                        "tab_type": "task"
+                    },
+                    "g-null-struct": {
+                        "state": null,
+                        "strategies": null,
+                        "tab_type": "text"
+                    }
+                }
+            }
+        });
+        let resp: ProgressResponse =
+            serde_json::from_value(v).expect("浮点/字符串/null 结构应可正常解析");
+        let tasks = build_tasks("u1", &resp.rt);
+
+        let t_float = tasks.iter().find(|t| t.group_id == "g-float").unwrap();
+        assert!(t_float.required && t_float.passed);
+        assert_eq!(t_float.min_score_pct, 1); // 0.75 round → 1
+        assert_eq!(t_float.start_time, 1788710400);
+        assert_eq!(t_float.end_time, 1791648000);
+
+        let t_string = tasks.iter().find(|t| t.group_id == "g-string").unwrap();
+        assert!(t_string.required && t_string.passed);
+        assert_eq!(
+            (t_string.min_score_pct, t_string.start_time, t_string.end_time),
+            (60, 1788710400, 1791647999)
+        );
+
+        let t_null = tasks.iter().find(|t| t.group_id == "g-null-struct").unwrap();
+        assert!(!t_null.required && !t_null.passed);
+        assert_eq!(
+            (t_null.min_score_pct, t_null.start_time, t_null.end_time),
+            (0, 0, 0)
+        );
+
+        // 课程级：units 项 strategies 为 null/浮点均可解析
+        let cv = serde_json::json!({
+            "rt": {
+                "units": {
+                    "u1": {"strategies": null},
+                    "u2": {"strategies": {"min_score_pct": 0.75, "start_time": null}}
+                },
+                "publish_version": 139753
+            }
+        });
+        let c: CourseProgressResponse =
+            serde_json::from_value(cv).expect("课程级 null/浮点/数字版本号应可解析");
+        // 数字 publish_version 走 null_default 会失败？此处应为字符串兜底
+        assert_eq!(c.rt.publish_version, "139753");
+        assert_eq!(c.rt.units.len(), 2);
     }
 
     #[test]

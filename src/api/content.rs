@@ -1,3 +1,4 @@
+use crate::api::serde_util::tolerant_opt_i64;
 use crate::api::session::{Session, content_url};
 use aes::Aes128;
 use aes::cipher::{BlockDecrypt, KeyInit};
@@ -11,9 +12,9 @@ pub struct ContentWrapper {
     pub content: Option<String>,
     #[serde(default)]
     pub k: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "tolerant_opt_i64")]
     pub publish_version: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "tolerant_opt_i64")]
     pub version: Option<i64>,
     #[serde(default)]
     pub schema: Option<String>,
@@ -113,5 +114,25 @@ mod tests {
     #[test]
     fn decrypt_escapes_empty() {
         assert_eq!(decrypt_content("", "x").unwrap(), "");
+    }
+
+    #[test]
+    fn content_wrapper_tolerates_null_float_string_version() {
+        let w: ContentWrapper = serde_json::from_value(serde_json::json!({
+            "content": null, "k": null,
+            "publish_version": null, "version": null
+        }))
+        .unwrap();
+        assert_eq!((w.publish_version, w.version), (None, None));
+
+        let w: ContentWrapper = serde_json::from_value(serde_json::json!({
+            "publish_version": 0.75, "version": "139753"
+        }))
+        .unwrap();
+        assert_eq!(w.publish_version, Some(1)); // 0.75 round → 1
+        assert_eq!(w.version, Some(139753));
+
+        let w: ContentWrapper = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!((w.publish_version, w.version), (None, None));
     }
 }

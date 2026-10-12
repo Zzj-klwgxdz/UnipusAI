@@ -420,6 +420,9 @@ cargo test
 - **多账号数据隔离**：数据库改为每账号一个文件 `dump_text/dump-<open_id>.db`（未登录回退旧 `dump.db`），任务/状态/汇总/预览全部按当前账号读写，修复"换账号后进度被识别为旧账号"的问题；旧 `dump.db` 保留原样，可手动改名归属旧账号；`--force` 仅清空当前账号的库
 - TUI 主界面底栏新增 `c 课程` 按钮（与快捷键 `c` 等效，支持鼠标点击），按钮宽度调整为每键 12 列；帮助与 Readme 键位同步为 `d` 导出
 - **修复进度接口 `strategies` 字段为 null 导致的崩溃** ：`end_time`/`start_time`/`min_score_pct` 改为可空并在构造任务时兜底 0；`duration`/`publish_version`/`LeafState` 等同类字段增加"缺失或显式 null 均取默认值"的反序列化兜底，避免部分课程/单元解析失败导致 `progress` 退出
+### 26/10/12
+- **修复 issue #21：浮点/字符串型字段与 null 结构导致的解析失败**：新增宽容数值/字符串反序列化（缺失/null/浮点四舍五入/数字字符串均可，如 `min_score_pct: 0.75`、`start_time: "1788710400"`、`publish_version: 139753`）；`state`/`strategies` 为显式 null 时按默认值处理（视听说等课程不再因反序列化失败而无法导出/刷课）；TUI 课程结构为空时显示占位提示"本地无该课程数据：按 d 导出"，空库状态文案同步为 `d`
+> 本修复在v3.5 release尚未应用
 
 
 

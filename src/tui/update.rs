@@ -54,7 +54,7 @@ impl App {
                             self.task_sel = None;
                         }
                         self.status = if self.units.is_empty() {
-                            "尚无 dump 数据：按 D 导出".into()
+                            "尚无 dump 数据：按 d 导出".into()
                         } else {
                             format!("已从数据库加载 {} 个单元", self.units.len())
                         };

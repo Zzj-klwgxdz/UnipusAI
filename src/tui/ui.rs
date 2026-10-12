@@ -153,6 +153,31 @@ fn render_tree(f: &mut Frame, app: &mut App, area: Rect) {
         width: area.width.saturating_sub(2),
         height: area.height.saturating_sub(2),
     };
+    let block = Block::default().borders(Borders::ALL).title(" 课程结构 ");
+    // 空态占位提示（本地库无该课程数据时给出引导）
+    if rows.is_empty() {
+        f.render_widget(block, area);
+        let msg = if app.loading_tree {
+            "正在加载本地数据…"
+        } else {
+            "本地无该课程数据：按 d 导出（dump-text），导出后自动刷新"
+        };
+        let rows_l = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(45),
+                Constraint::Length(1),
+                Constraint::Percentage(45),
+            ])
+            .split(inner);
+        f.render_widget(
+            Paragraph::new(msg)
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::DarkGray)),
+            rows_l[1],
+        );
+        return;
+    }
     let inner_h = inner.height as usize;
     // 选中项尽量居中（顶部/底部贴边）
     let offset = sel
@@ -221,7 +246,6 @@ fn render_tree(f: &mut Frame, app: &mut App, area: Rect) {
         };
         app.mouse_map.push((rect, action));
     }
-    let block = Block::default().borders(Borders::ALL).title(" 课程结构 ");
     f.render_widget(Paragraph::new(lines).block(block), area);
     // 右侧滚动条（内容超出可视区时显示）
     if rows.len() > inner_h {
@@ -938,6 +962,18 @@ mod tests {
         let mut app = test_app();
         let text = compact(&render_text(&mut app));
         assert!(text.contains("c课程"), "底栏应包含 c 课程 按钮:\n{}", text);
+    }
+
+    #[test]
+    fn empty_tree_shows_placeholder_hint() {
+        let mut app = test_app();
+        // 无单元时（本地库为空）任务树区域应给出导出引导
+        let text = compact(&render_text(&mut app));
+        assert!(
+            text.contains("本地无该课程数据"),
+            "空树应显示占位提示:\n{}",
+            text
+        );
     }
 
     #[test]
