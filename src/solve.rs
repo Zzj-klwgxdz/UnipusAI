@@ -23,6 +23,7 @@ pub async fn solve_module(session: &Session, m: &Module) -> Result<Vec<String>> 
         }
         "fillblank" | "text-area" => solve_batch(session, m).await,
         "bankedcloze" => solve_banked_cloze(session, m).await,
+        "dropdownSelection" => solve_dropdown_selection(session, m).await,
         "discussion" => solve_discussion(session, m).await,
         "vocabulary" => Ok(Vec::new()),
         other => {
@@ -255,6 +256,172 @@ async fn solve_banked_cloze(session: &Session, m: &Module) -> Result<Vec<String>
             }
         }
     }
+}
+
+/// 下拉选择（dropdownSelection）：材料带编号空格（____1____…），每个空对应一个子题和一组选项。
+/// children 顺序与空位编号一致；一次 LLM 调用按编号作答，提交值为选项标签（与单选一致）。
+async fn solve_dropdown_selection(session: &Session, m: &Module) -> Result<Vec<String>> {
+    let count = m.children.len();
+    if !session.cfg().use_llm() {
+        return Ok(m.children.iter().map(random_choice).collect());
+    }
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(ctx) = material_context(m) {
+        lines.push(ctx);
+        lines.push(String::new());
+    } else if let Some(ctx) = media_context(session, m).await {
+        lines.push(ctx);
+        lines.push(String::new());
+    }
+    lines.push(format!(
+        "【下拉选择】材料中共有 {} 个编号空格（____1____、____2____…），请为每个空格从对应选项中选出最合适的一项：",
+        count
+    ));
+    for (i, c) in m.children.iter().enumerate() {
+        let opts: Vec<String> = c
+            .options
+            .iter()
+            .map(option_label_text)
+            .filter(|s| !s.is_empty())
+            .collect();
+        lines.push(format!(
+            "第{}空（____{}____）选项: {}",
+            i + 1,
+            i + 1,
+            opts.join("，")
+        ));
+    }
+    lines.push(String::new());
+    lines.push("请按题号回答，格式：1.A 2.B 3.A ...（只输出选项字母）".to_string());
+    let prompt = lines.join("\n");
+    match llm::ask(session, SYSTEM_PROMPT, &prompt).await {
+        Ok(ans) => Ok(canonicalize_dropdown(
+            &parse_dropdown_answers(&ans, count),
+            m,
+        )),
+        Err(e) => {
+            if session.cfg().fallback_on_llm_failure {
+                log::warn!("LLM 失败，下拉选择随机兜底: {:#}", e);
+                Ok(m.children.iter().map(random_choice).collect())
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// 选项展示文本：`A=do`（标签取 name，回退 value；文本取 text，回退 value）。
+fn option_label_text(o: &OptionItem) -> String {
+    let label = if o.name.is_empty() {
+        o.value.clone()
+    } else {
+        o.name.clone()
+    };
+    let text = if o.text.is_empty() {
+        o.value.clone()
+    } else {
+        o.text.clone()
+    };
+    match (label.is_empty(), text.is_empty()) {
+        (false, false) => format!("{}={}", label, text),
+        (false, true) => label,
+        (true, false) => text,
+        (true, true) => String::new(),
+    }
+}
+
+/// 解析下拉题批量答案：优先按编号（1.A 2.B…），不足时按空白/逗号切分兜底。
+fn parse_dropdown_answers(ans: &str, expected: usize) -> Vec<String> {
+    let mut parts = split_numbered(ans);
+    if parts.len() < expected {
+        let tokens: Vec<String> = ans
+            .split(|ch: char| {
+                ch.is_whitespace() || matches!(ch, ',' | '，' | ';' | '；' | '、')
+            })
+            .map(|s| {
+                s.trim()
+                    .trim_matches(|ch: char| matches!(ch, '.' | ')' | ']' | '、'))
+                    .to_string()
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        if tokens.len() >= expected {
+            parts = tokens;
+        }
+    }
+    parts
+}
+
+/// 将批量答案规范化为每个子题的合法选项标签；无法匹配时随机兜底。
+fn canonicalize_dropdown(parts: &[String], m: &Module) -> Vec<String> {
+    let mut out = Vec::with_capacity(m.children.len());
+    for (i, c) in m.children.iter().enumerate() {
+        let raw = parts.get(i).map(|s| s.trim()).unwrap_or("");
+        match match_option_label(raw, c) {
+            Some(label) => out.push(label),
+            None => {
+                log::warn!(
+                    "下拉选择第 {} 空答案无法匹配选项（{:?}），随机兜底",
+                    i + 1,
+                    raw
+                );
+                out.push(random_choice(c));
+            }
+        }
+    }
+    out
+}
+
+/// 把单个答案匹配到子题选项标签：先按标签，再按选项文本，最后提取首字母。
+fn match_option_label(raw: &str, c: &ChildQ) -> Option<String> {
+    if raw.is_empty() {
+        return None;
+    }
+    let cleaned = raw.trim().trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '.' | ',' | '，' | '。' | '、' | ';' | '；' | '"' | '\'' | '“' | '”'
+        )
+    });
+    if cleaned.is_empty() {
+        return None;
+    }
+    let lower = cleaned.to_lowercase();
+    let label_of = |o: &OptionItem| -> String {
+        if o.name.is_empty() {
+            o.value.clone()
+        } else {
+            o.name.clone()
+        }
+    };
+    for o in &c.options {
+        let label = label_of(o);
+        if !label.is_empty() && label.to_lowercase() == lower {
+            return Some(label);
+        }
+    }
+    for o in &c.options {
+        let text = if o.text.is_empty() { &o.value } else { &o.text };
+        if !text.is_empty() && text.trim().to_lowercase() == lower {
+            let label = label_of(o);
+            if !label.is_empty() {
+                return Some(label);
+            }
+        }
+    }
+    let letter = cleaned
+        .chars()
+        .find(|ch| ch.is_ascii_alphabetic())
+        .map(|ch| ch.to_ascii_uppercase().to_string());
+    if let Some(letter) = letter {
+        for o in &c.options {
+            let label = label_of(o);
+            if !label.is_empty() && label.to_uppercase() == letter {
+                return Some(label);
+            }
+        }
+    }
+    None
 }
 
 /// 讨论题：根据答题说明与讨论问题，用 LLM 生成一段英文讨论发言。
@@ -522,6 +689,22 @@ fn strip_number_prefix(s: &str) -> String {
 
 fn random_choice(c: &ChildQ) -> String {
     use rand::Rng;
+    // 有选项时直接随机取合法选项标签（下拉/选择等题型）。
+    if !c.options.is_empty() {
+        let idx = rand::thread_rng().gen_range(0..c.options.len());
+        let o = &c.options[idx];
+        let label = if o.name.is_empty() {
+            o.value.clone()
+        } else {
+            o.name.clone()
+        };
+        if !label.is_empty() {
+            return label;
+        }
+        if !o.text.is_empty() {
+            return o.text.clone();
+        }
+    }
     match c.reply_type.as_str() {
         "singlechoice" | "multichoice" if c.option_count > 0 => {
             let idx = rand::thread_rng().gen_range(0..c.option_count);
@@ -560,6 +743,76 @@ mod tests {
             vec!["apple", "banana"]
         );
         assert_eq!(parse_banked("1. one 2. two", 2), vec!["one", "two"]);
+    }
+
+    fn dropdown_module() -> Module {
+        let opts = || {
+            vec![
+                OptionItem {
+                    name: "A".into(),
+                    value: "A".into(),
+                    text: "do".into(),
+                },
+                OptionItem {
+                    name: "B".into(),
+                    value: "B".into(),
+                    text: "make".into(),
+                },
+            ]
+        };
+        Module {
+            instance_id: "m".into(),
+            module_type: "basic-scoop-content".into(),
+            direction: "Choose to fill in the blanks with either do or make.".into(),
+            material: "I ____1____ my own decisions. He ____2____ an arrangement.".into(),
+            media_sources: Vec::new(),
+            transcript: String::new(),
+            reply_type: "dropdownSelection".into(),
+            word_bank: Vec::new(),
+            children: (0..2)
+                .map(|_| ChildQ {
+                    question_type: "basic-scoop-content".into(),
+                    reply_type: "dropdownSelection".into(),
+                    question_text: String::new(),
+                    options: opts(),
+                    option_count: 2,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn dropdown_answers_normalized_to_labels() {
+        let m = dropdown_module();
+        let parts = parse_dropdown_answers("1.B 2.A", 2);
+        assert_eq!(canonicalize_dropdown(&parts, &m), vec!["B", "A"]);
+        // 无编号输出（空格分隔）
+        let parts = parse_dropdown_answers("B A", 2);
+        assert_eq!(canonicalize_dropdown(&parts, &m), vec!["B", "A"]);
+        // 输出选项文本而非字母
+        let parts = parse_dropdown_answers("1. make 2. do", 2);
+        assert_eq!(canonicalize_dropdown(&parts, &m), vec!["B", "A"]);
+        // 选项值的原始数据即 A/B（与真实课程一致）
+        let parts = parse_dropdown_answers("B,B", 2);
+        assert_eq!(canonicalize_dropdown(&parts, &m), vec!["B", "B"]);
+    }
+
+    #[test]
+    fn dropdown_unknown_answer_falls_back_to_valid_label() {
+        let m = dropdown_module();
+        let parts = parse_dropdown_answers("1.Z", 2);
+        let out = canonicalize_dropdown(&parts, &m);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|v| v == "A" || v == "B"), "{:?}", out);
+    }
+
+    #[test]
+    fn random_choice_uses_valid_labels() {
+        let m = dropdown_module();
+        for _ in 0..20 {
+            let v = random_choice(&m.children[0]);
+            assert!(v == "A" || v == "B", "unexpected: {}", v);
+        }
     }
 
     #[test]

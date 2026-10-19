@@ -14,7 +14,7 @@
 - **纯CLI工具**：提供 `progress` / `run` / `group` / `debug` / `test-types` / `transcribe` / `dump-text` 等命令，方便调试与验证。
 - **交互式 TUI**：直接运行 `UnipusAI`（无参数）进入终端界面：浏览课程/单元/任务、运行与取消、dump 总览与导出、配置编辑，支持鼠标（ratatui）；任务树与预览全部来自本地数据库，可离线浏览，支持单任务重抓。
 - **全自动刷课**：遍历课程全部单元/任务组，自动解析并作答提交，跳过已通过的章节。
-- **AI 答题**：接入任意 OpenAI 兼容接口，覆盖选择、填空、简答等常见题型。
+- **AI 答题**：接入任意 OpenAI 兼容接口，覆盖选择、填空、简答、下拉选择（dropdownSelection）等常见题型。
 - **讨论题自动发言**：讨论区（discussion）题型自动生成英文发言并发布到讨论区，再标记任务完成。
 - **单词卡/朗读练习**：vocabulary 题型无需作答，自动标记完成；`debug`/`dump-text` 可查看单词表。
 - **限频自动重试**：提交命中服务端"操作过于频繁"时，自动等待冷却（递增 180s，最多 5 次）后重试。
@@ -135,6 +135,7 @@ ParsedGroup
 ### 5. 作答策略（`solve.rs`）
 - **选择题**（singlechoice / multichoice）：把材料/字幕 + 题干 + 选项拼成 prompt，让 LLM 只回答选项字母；再解析为合法选项（`parse_single` / `parse_multi`）。
 - **填空/简答**（fillblank / text-area）：整组拼接为一批题目，要求 LLM 按 `1.xxx 2.xxx` 编号回答，再按序拆分（`parse_banked`）。
+- **下拉选择**（dropdownSelection）：材料中带编号空格（`____1____`…），按空位顺序批量让 LLM 作答；答案逐空规范化为该空的合法选项标签（如 A/B），提交格式与单选一致。
 - **讨论题**（discussion）：根据答题说明与讨论问题让 LLM 生成 100–150 词英文发言（`solve_discussion`），发帖流程见"讨论题"一节。
 - **LLM 失败兜底**：可配置随机作答或返回占位答案。
 
@@ -426,7 +427,9 @@ cargo test
 - **修复进度接口 `strategies` 字段为 null 导致的崩溃** ：`end_time`/`start_time`/`min_score_pct` 改为可空并在构造任务时兜底 0；`duration`/`publish_version`/`LeafState` 等同类字段增加"缺失或显式 null 均取默认值"的反序列化兜底，避免部分课程/单元解析失败导致 `progress` 退出
 ### 26/10/12
 - **修复 issue #21：浮点/字符串型字段与 null 结构导致的解析失败**：新增宽容数值/字符串反序列化（缺失/null/浮点四舍五入/数字字符串均可，如 `min_score_pct: 0.75`、`start_time: "1788710400"`、`publish_version: 139753`）；`state`/`strategies` 为显式 null 时按默认值处理（视听说等课程不再因反序列化失败而无法导出/刷课）；TUI 课程结构为空时显示占位提示"本地无该课程数据：按 d 导出"，空库状态文案同步为 `d`
-> 本修复在v3.5 release尚未应用
+### 26/10/19
+- 新增**下拉选择（dropdownSelection）**支持：解析材料中的编号空格（`____n____`）并按空位顺序批量作答，答案逐空规范化为该空的合法选项标签（如 A/B），提交格式与单选一致；无 LLM 或作答失败时随机合法选项兜底
+- 修复 `random_choice` 对带选项的未知题型返回非法占位值 `answer` 的问题（现在优先随机选项标签）
 
 
 
