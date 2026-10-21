@@ -2,9 +2,11 @@ use UnipusAI::api::session::Session;
 use UnipusAI::config::Config;
 use anyhow::{Context, Result};
 use colored::Colorize;
+#[cfg(not(debug_assertions))]
 use crossterm::event::{self, Event, KeyEventKind};
-// use crossterm::style::Stylize;
+#[cfg(not(debug_assertions))]
 use crossterm::terminal;
+#[cfg(not(debug_assertions))]
 use figlet_rs::FIGlet;
 
 use std::io::Write;
@@ -33,6 +35,7 @@ impl std::io::Write for TeeWriter {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    #[cfg(not(debug_assertions))]
     print_hello()?;
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("");
@@ -49,6 +52,7 @@ async fn main() -> Result<()> {
 
     // 无参数 / --tui：交互式界面
     if args.len() <= 1 || cmd == "--tui" || cmd == "tui" {
+        #[cfg(not(debug_assertions))]
         wait_any_key()?;
         let cfg = Config::load(&config_path)?;
         let mut session = Session::new(cfg, config_path)?;
@@ -827,26 +831,24 @@ fn print_help() {
 "#
     );
 }
+#[cfg(not(debug_assertions))]
 fn print_hello() -> Result<()> {
     let font = FIGlet::standard().map_err(|e| anyhow::anyhow!(e))?;
     if let Some(title) = font.convert("UnipusAI") {
         println!("{}", title.to_string().cyan());
     }
-    println!("{}","UnipusAI_v3.5\n\t\t\t--by Zzj\nU校园AI版自动刷题脚本".truecolor(255, 153, 255).bold());
-    println!("{}",r#"v3.5更新日志
-        - 新增**账号密码自动登录**：`config.json` 只填 `username`/`password` 即可；启动时 jwt 剩余 >24h 直接用、否则 refresh_token 刷新、失败再用账密重登，凭证自动写回 cookie/open_id/refresh_token；运行中接口 401 自动刷新并重试（单飞防并发）；受服务端验证码（极验/图形）限制时给出明确提示并保留 cookie 兜底
-        - 新增 CLI `login [--force]`（查看/刷新登录态）、`courses`（列出账号课程）、`course <序号|id>`（选择课程，所有命令共用，自动填充 course_id/class_id）
-        - TUI 新增课程选择界面（`c` 键，未选课程时启动自动打开）；设置页新增 username/password 字段，保存后自动尝试登录
-        - 数据库 `tasks` 新增 `course_id` 列并按课程隔离（TUI 任务树/dump 汇总只显示当前课程，旧数据按 meta 自动回填）
-        - `x_annotator_auth_token` 改为**本地自动签发**（前端同算法/同密钥的 HS256 JWT，1 年有效，剩余 <30 天自动续签）——至此凭证类字段全部无需手动填写
-        - annotator 签名参数改为**按需从 ucontent 前端 bundle 动态提取**（仅 token 需重签或请求 401 时触发），密钥/iss/aud/TTL 轮换后可自动自愈；401 处理升级为"jwt 刷新 → annotator 重提取重签 → 提示手动兜底"阶梯；新增 `annotator [--extract]` 命令查看/强制重提取"#.green()
+    println!("{}","UnipusAI_v3.6\n\t\t\t--by Zzj\nU校园AI版自动刷题脚本".truecolor(255, 153, 255).bold());
+    println!("{}",r#"v3.6更新日志
+        - **修复 issue #21：浮点/字符串型字段与 null 结构导致的解析失败**：新增宽容数值/字符串反序列化（缺失/null/浮点四舍五入/数字字符串均可，如 `min_score_pct: 0.75`、`start_time: "1788710400"`、`publish_version: 139753`）；`state`/`strategies` 为显式 null 时按默认值处理（视听说等课程不再因反序列化失败而无法导出/刷课）；TUI 课程结构为空时显示占位提示"本地无该课程数据：按 d 导出"，空库状态文案同步为 `d`
+        - 新增**下拉选择（dropdownSelection）**支持：解析材料中的编号空格（`____n____`）并按空位顺序批量作答，答案逐空规范化为该空的合法选项标签（如 A/B），提交格式与单选一致
+        - 修复 `random_choice` 对带选项的未知题型返回非法占位值 `answer` 的问题"#.green()
     );
-    println!("{}","提示：如果你现在用的是v3.4及以前的config.json请更新到v3.5版本的".bright_magenta().bold());
+    println!("{}","提示：如果你现在用的是v3.4及以前的config.json,请更新到v3.6版本的".bright_magenta().bold());
     println!("{}","本软件完全免费，并且在https://github.com/Zzj-klwgxdz/UnipusAI上开源，作者未授权给任何人售卖。如果你是通过购买获得的，请立刻退货，并向平台举报".yellow().bold());
     println!("{}","导狗死全家".red().bold());
     Ok(())
 }
-
+#[cfg(not(debug_assertions))]
 /// 仅交互终端等待任意按键；忽略按键松开（Windows 下启动命令的 Enter 弹起事件会残留）。
 fn wait_any_key() -> Result<()> {
     use std::io::IsTerminal;
