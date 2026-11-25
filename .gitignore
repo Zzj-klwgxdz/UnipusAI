@@ -2,8 +2,12 @@
 /logs
 /.media_cache
 /dump_text
+/reports
 /config.json
 /.unit_labels.json
 /config_zzj.json
 /config_zzr.json
 /tests
+/AGENTS.md
+/.idea
+/imgs

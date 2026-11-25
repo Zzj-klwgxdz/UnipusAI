@@ -5,16 +5,25 @@ use rusqlite::{Connection, params};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// 数据库文件名（位于 dump_text 目录下）。
+/// 旧版单库文件名（仅兼容保留，不再写入）。
 pub const DB_FILE: &str = "dump.db";
+
+/// 平台标识（与 config::Site 一致）。
+pub const SITE_UNIPUS: &str = "unipusai";
+pub const SITE_CHAOXING: &str = "chaoxing";
+pub const SITE_ZHIHUISHU: &str = "zhihuishu";
 
 /// 默认（未登录/旧版）数据库完整路径。
 pub fn db_path() -> PathBuf {
     Path::new(DUMP_DIR).join(DB_FILE)
 }
 
-/// 按账号返回数据库路径：`dump_text/dump-<open_id>.db`；
-/// open_id 为空（未登录/离线）时回退旧 `dump_text/dump.db`。
+/// 每个网课平台一个数据库：`dump_text/<site>.db`。
+pub fn db_path_for_site(site: &str) -> PathBuf {
+    Path::new(DUMP_DIR).join(format!("{}.db", site))
+}
+
+/// 旧版按账号分库路径（仅用于迁移提示/兼容，不再写入）。
 pub fn db_path_for(open_id: &str) -> PathBuf {
     if open_id.is_empty() {
         db_path()
@@ -27,6 +36,7 @@ pub fn db_path_for(open_id: &str) -> PathBuf {
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS tasks (
     id          INTEGER PRIMARY KEY,
+    account     TEXT    NOT NULL DEFAULT '',
     unit_index  INTEGER NOT NULL,
     unit_id     TEXT    NOT NULL,
     unit_label  TEXT,
@@ -40,11 +50,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     raw_json    TEXT,
     course_id   TEXT,
     updated_at  TEXT    NOT NULL,
-    UNIQUE(unit_id, group_id)
+    UNIQUE(account, unit_id, group_id)
 );
 CREATE TABLE IF NOT EXISTS meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
+    account TEXT NOT NULL DEFAULT '',
+    key     TEXT NOT NULL,
+    value   TEXT NOT NULL,
+    PRIMARY KEY (account, key)
 );
 CREATE TABLE IF NOT EXISTS modules (
     id            INTEGER PRIMARY KEY,
@@ -74,6 +86,19 @@ CREATE TABLE IF NOT EXISTS vocabulary (
     name      TEXT    NOT NULL,
     sound     TEXT    NOT NULL
 );
+CREATE TABLE IF NOT EXISTS quiz_results (
+    id          INTEGER PRIMARY KEY,
+    account     TEXT    NOT NULL DEFAULT '',
+    course_id   TEXT    NOT NULL,
+    chapter_id  TEXT    NOT NULL,
+    task_id     TEXT    NOT NULL,
+    title       TEXT    NOT NULL,
+    score       REAL,
+    total       INTEGER NOT NULL,
+    answered    INTEGER NOT NULL,
+    updated_at  TEXT    NOT NULL,
+    UNIQUE(account, task_id)
+);
 CREATE TABLE IF NOT EXISTS questions (
     id            INTEGER PRIMARY KEY,
     module_id     INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
@@ -100,9 +125,124 @@ pub fn open() -> Result<Connection> {
     open_path(&db_path())
 }
 
-/// 按账号打开（必要时创建）数据库并初始化 schema。
+/// 按账号打开（必要时创建）数据库并初始化 schema（旧接口，单平台用法）。
 pub fn open_for(open_id: &str) -> Result<Connection> {
     open_path(&db_path_for(open_id))
+}
+
+/// 按平台打开数据库（每个平台一个库）。
+pub fn open_site(site: &str) -> Result<Connection> {
+    open_path(&db_path_for_site(site))
+}
+
+/// 平台数据库句柄：绑定账号，提供按账号隔离的读写。
+pub struct Db {
+    pub conn: Connection,
+    pub site: String,
+    pub account: String,
+}
+
+impl Db {
+    pub fn open(site: &str, account: &str) -> Result<Self> {
+        Ok(Self {
+            conn: open_site(site)?,
+            site: site.to_string(),
+            account: account.to_string(),
+        })
+    }
+
+    pub fn path(site: &str) -> PathBuf {
+        db_path_for_site(site)
+    }
+
+    pub fn save_task(&mut self, t: &TaskInput<'_>) -> Result<i64> {
+        save_task(&mut self.conn, &self.account, t)
+    }
+    pub fn task_exists(&self, unit_id: &str, group_id: &str) -> Result<bool> {
+        task_exists(&self.conn, &self.account, unit_id, group_id)
+    }
+    pub fn task_needs_refresh(&self, unit_id: &str, group_id: &str, course_id: &str) -> Result<bool> {
+        task_needs_refresh(&self.conn, &self.account, unit_id, group_id, course_id)
+    }
+    pub fn task_status(&self, unit_id: &str, group_id: &str) -> Result<Option<(bool, bool)>> {
+        task_status(&self.conn, &self.account, unit_id, group_id)
+    }
+    pub fn task_meta(&self, course_id: &str, group_id: &str) -> Result<Option<TaskMeta>> {
+        task_meta(&self.conn, &self.account, course_id, group_id)
+    }
+    pub fn set_passed(&self, unit_id: &str, group_id: &str, passed: bool) -> Result<bool> {
+        set_passed(&self.conn, &self.account, unit_id, group_id, passed)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_status(
+        &self,
+        unit_id: &str,
+        group_id: &str,
+        unit_index: usize,
+        unit_label: Option<&str>,
+        tab_type: &str,
+        required: bool,
+        passed: bool,
+    ) -> Result<bool> {
+        update_status(
+            &self.conn,
+            &self.account,
+            unit_id,
+            group_id,
+            unit_index,
+            unit_label,
+            tab_type,
+            required,
+            passed,
+        )
+    }
+    pub fn clear(&self) -> Result<()> {
+        clear_all(&self.conn, &self.account)
+    }
+    pub fn task_count(&self, course_id: &str) -> Result<usize> {
+        task_count(&self.conn, &self.account, course_id)
+    }
+    pub fn save_meta(&self, key: &str, value: &str) -> Result<()> {
+        save_meta(&self.conn, &self.account, key, value)
+    }
+    pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
+        get_meta(&self.conn, &self.account, key)
+    }
+    pub fn load_tree(&self, course_id: &str) -> Result<Vec<TreeUnit>> {
+        load_tree(&self.conn, &self.account, course_id)
+    }
+    pub fn load_stored(&self, group_id: &str) -> Result<Option<StoredTask>> {
+        load_stored(&self.conn, &self.account, group_id)
+    }
+    pub fn summary_text(&self, course_id: &str) -> Result<Option<String>> {
+        summary_text(&self.conn, &self.account, course_id)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_quiz_result(
+        &self,
+        course_id: &str,
+        chapter_id: &str,
+        task_id: &str,
+        title: &str,
+        score: Option<f64>,
+        total: usize,
+        answered: usize,
+    ) -> Result<()> {
+        save_quiz_result(
+            &self.conn,
+            &self.account,
+            course_id,
+            chapter_id,
+            task_id,
+            title,
+            score,
+            total,
+            answered,
+        )
+    }
+    pub fn load_quiz_results(&self, course_id: &str) -> Result<Vec<QuizResult>> {
+        load_quiz_results(&self.conn, &self.account, course_id)
+    }
 }
 
 /// 打开指定路径的数据库并初始化 schema。
@@ -127,7 +267,7 @@ pub fn init(conn: &Connection) -> Result<()> {
     ensure_column(conn, "tasks", "course_id", "course_id TEXT")?;
     conn.execute_batch(SCHEMA_INDEXES)?;
     // 旧数据回填：按 meta 中记录的 course_id 归属
-    if let Some(cid) = get_meta(conn, "course_id")?
+    if let Some(cid) = get_meta(conn, "", "course_id")?
         && !cid.is_empty()
     {
         conn.execute("UPDATE tasks SET course_id=?1 WHERE course_id IS NULL", [&cid])?;
@@ -203,14 +343,14 @@ fn options_json(opts: &[OptionItem]) -> String {
 }
 
 /// 写入/更新一个任务及其全部内容（单事务；覆盖旧内容）。
-pub fn save_task(conn: &mut Connection, t: &TaskInput<'_>) -> Result<i64> {
+pub fn save_task(conn: &mut Connection, account: &str, t: &TaskInput<'_>) -> Result<i64> {
     let tx = conn.transaction()?;
     let now = now_local_string();
     tx.execute(
-        "INSERT INTO tasks (unit_index, unit_id, unit_label, group_id, tab_type, group_type,
+        "INSERT INTO tasks (account, unit_index, unit_id, unit_label, group_id, tab_type, group_type,
                             kind, required, passed, raw_content, raw_json, course_id, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-         ON CONFLICT(unit_id, group_id) DO UPDATE SET
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+         ON CONFLICT(account, unit_id, group_id) DO UPDATE SET
             unit_index=excluded.unit_index,
             unit_label=excluded.unit_label,
             tab_type=excluded.tab_type,
@@ -223,6 +363,7 @@ pub fn save_task(conn: &mut Connection, t: &TaskInput<'_>) -> Result<i64> {
             course_id=excluded.course_id,
             updated_at=excluded.updated_at",
         params![
+            account,
             t.unit_index as i64,
             t.unit_id,
             t.unit_label,
@@ -239,8 +380,8 @@ pub fn save_task(conn: &mut Connection, t: &TaskInput<'_>) -> Result<i64> {
         ],
     )?;
     let task_id: i64 = tx.query_row(
-        "SELECT id FROM tasks WHERE unit_id=?1 AND group_id=?2",
-        params![t.unit_id, t.group_id],
+        "SELECT id FROM tasks WHERE account=?1 AND unit_id=?2 AND group_id=?3",
+        params![account, t.unit_id, t.group_id],
         |r| r.get(0),
     )?;
     // 覆盖旧内容：删除子表行后重插（级联删除 media/vocabulary/questions）
@@ -302,10 +443,10 @@ pub fn save_task(conn: &mut Connection, t: &TaskInput<'_>) -> Result<i64> {
 }
 
 /// 任务是否存在。
-pub fn task_exists(conn: &Connection, unit_id: &str, group_id: &str) -> Result<bool> {
+pub fn task_exists(conn: &Connection, account: &str, unit_id: &str, group_id: &str) -> Result<bool> {
     let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE unit_id=?1 AND group_id=?2",
-        params![unit_id, group_id],
+        "SELECT COUNT(*) FROM tasks WHERE account=?1 AND unit_id=?2 AND group_id=?3",
+        params![account, unit_id, group_id],
         |r| r.get(0),
     )?;
     Ok(n > 0)
@@ -314,13 +455,15 @@ pub fn task_exists(conn: &Connection, unit_id: &str, group_id: &str) -> Result<b
 /// 已入库任务是否需要重新抓取：缺 raw_json（旧库升级）或 course_id 不匹配（换课/旧数据）。
 pub fn task_needs_refresh(
     conn: &Connection,
+    account: &str,
     unit_id: &str,
     group_id: &str,
     course_id: &str,
 ) -> Result<bool> {
-    let mut stmt = conn
-        .prepare("SELECT kind, raw_json, course_id FROM tasks WHERE unit_id=?1 AND group_id=?2")?;
-    let mut rows = stmt.query(params![unit_id, group_id])?;
+    let mut stmt = conn.prepare(
+        "SELECT kind, raw_json, course_id FROM tasks WHERE account=?1 AND unit_id=?2 AND group_id=?3",
+    )?;
+    let mut rows = stmt.query(params![account, unit_id, group_id])?;
     match rows.next()? {
         Some(r) => {
             let kind: String = r.get(0)?;
@@ -333,22 +476,69 @@ pub fn task_needs_refresh(
 }
 
 /// 读取任务状态（是否必修, 是否已完成）。
-pub fn task_status(conn: &Connection, unit_id: &str, group_id: &str) -> Result<Option<(bool, bool)>> {
+pub fn task_status(
+    conn: &Connection,
+    account: &str,
+    unit_id: &str,
+    group_id: &str,
+) -> Result<Option<(bool, bool)>> {
     let mut stmt = conn.prepare(
-        "SELECT required, passed FROM tasks WHERE unit_id=?1 AND group_id=?2",
+        "SELECT required, passed FROM tasks WHERE account=?1 AND unit_id=?2 AND group_id=?3",
     )?;
-    let mut rows = stmt.query(params![unit_id, group_id])?;
+    let mut rows = stmt.query(params![account, unit_id, group_id])?;
     match rows.next()? {
         Some(r) => Ok(Some((r.get::<_, i64>(0)? != 0, r.get::<_, i64>(1)? != 0))),
         None => Ok(None),
     }
 }
 
+/// 单个任务组的元信息（probe 报告用）。
+#[derive(Debug, Clone, Default)]
+pub struct TaskMeta {
+    pub unit_id: String,
+    pub tab_type: String,
+    pub group_type: String,
+    pub kind: String,
+    pub required: bool,
+    pub passed: bool,
+}
+
+/// 按课程 + group_id 查询任务元信息；库中无该任务返回 None。
+pub fn task_meta(
+    conn: &Connection,
+    account: &str,
+    course_id: &str,
+    group_id: &str,
+) -> Result<Option<TaskMeta>> {
+    let mut stmt = conn.prepare(
+        "SELECT unit_id, tab_type, group_type, kind, required, passed
+         FROM tasks WHERE account=?1 AND course_id=?2 AND group_id=?3 ORDER BY rowid LIMIT 1",
+    )?;
+    let mut rows = stmt.query(params![account, course_id, group_id])?;
+    match rows.next()? {
+        Some(r) => Ok(Some(TaskMeta {
+            unit_id: r.get(0)?,
+            tab_type: r.get(1)?,
+            group_type: r.get(2)?,
+            kind: r.get(3)?,
+            required: r.get::<_, i64>(4)? != 0,
+            passed: r.get::<_, i64>(5)? != 0,
+        })),
+        None => Ok(None),
+    }
+}
+
 /// 更新任务完成情况；任务不存在返回 false。
-pub fn set_passed(conn: &Connection, unit_id: &str, group_id: &str, passed: bool) -> Result<bool> {
+pub fn set_passed(
+    conn: &Connection,
+    account: &str,
+    unit_id: &str,
+    group_id: &str,
+    passed: bool,
+) -> Result<bool> {
     let n = conn.execute(
-        "UPDATE tasks SET passed=?1, updated_at=?2 WHERE unit_id=?3 AND group_id=?4",
-        params![passed as i64, now_local_string(), unit_id, group_id],
+        "UPDATE tasks SET passed=?1, updated_at=?2 WHERE account=?3 AND unit_id=?4 AND group_id=?5",
+        params![passed as i64, now_local_string(), account, unit_id, group_id],
     )?;
     Ok(n > 0)
 }
@@ -357,6 +547,7 @@ pub fn set_passed(conn: &Connection, unit_id: &str, group_id: &str, passed: bool
 #[allow(clippy::too_many_arguments)]
 pub fn update_status(
     conn: &Connection,
+    account: &str,
     unit_id: &str,
     group_id: &str,
     unit_index: usize,
@@ -366,10 +557,11 @@ pub fn update_status(
     passed: bool,
 ) -> Result<bool> {
     let n = conn.execute(
-        "UPDATE tasks SET unit_index=?3, unit_label=COALESCE(?4, unit_label), tab_type=?5,
-                          required=?6, passed=?7, updated_at=?8
-         WHERE unit_id=?1 AND group_id=?2",
+        "UPDATE tasks SET unit_index=?4, unit_label=COALESCE(?5, unit_label), tab_type=?6,
+                          required=?7, passed=?8, updated_at=?9
+         WHERE account=?1 AND unit_id=?2 AND group_id=?3",
         params![
+            account,
             unit_id,
             group_id,
             unit_index as i64,
@@ -384,35 +576,35 @@ pub fn update_status(
 }
 
 /// 清空全部数据（--force 全量重建）。
-pub fn clear_all(conn: &Connection) -> Result<()> {
-    conn.execute("DELETE FROM tasks", [])?;
+pub fn clear_all(conn: &Connection, account: &str) -> Result<()> {
+    conn.execute("DELETE FROM tasks WHERE account=?1", [account])?;
     Ok(())
 }
 
 /// 任务总数（指定课程）。
-pub fn task_count(conn: &Connection, course_id: &str) -> Result<usize> {
+pub fn task_count(conn: &Connection, account: &str, course_id: &str) -> Result<usize> {
     let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE course_id=?1",
-        [course_id],
+        "SELECT COUNT(*) FROM tasks WHERE account=?1 AND course_id=?2",
+        params![account, course_id],
         |r| r.get(0),
     )?;
     Ok(n as usize)
 }
 
 /// 写入/更新 meta 键值（课程信息等）。
-pub fn save_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
+pub fn save_meta(conn: &Connection, account: &str, key: &str, value: &str) -> Result<()> {
     conn.execute(
-        "INSERT INTO meta (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        params![key, value],
+        "INSERT INTO meta (account, key, value) VALUES (?1, ?2, ?3)
+         ON CONFLICT(account, key) DO UPDATE SET value=excluded.value",
+        params![account, key, value],
     )?;
     Ok(())
 }
 
 /// 读取 meta 键值。
-pub fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
-    let mut stmt = conn.prepare("SELECT value FROM meta WHERE key=?1")?;
-    let mut rows = stmt.query([key])?;
+pub fn get_meta(conn: &Connection, account: &str, key: &str) -> Result<Option<String>> {
+    let mut stmt = conn.prepare("SELECT value FROM meta WHERE account=?1 AND key=?2")?;
+    let mut rows = stmt.query(params![account, key])?;
     match rows.next()? {
         Some(r) => Ok(Some(r.get(0)?)),
         None => Ok(None),
@@ -439,13 +631,13 @@ pub struct TreeTask {
 }
 
 /// 按单元分组加载指定课程的全部任务（顺序：unit_index, 入库顺序）。
-pub fn load_tree(conn: &Connection, course_id: &str) -> Result<Vec<TreeUnit>> {
+pub fn load_tree(conn: &Connection, account: &str, course_id: &str) -> Result<Vec<TreeUnit>> {
     let mut stmt = conn.prepare(
         "SELECT unit_index, unit_id, unit_label, group_id, tab_type, group_type, kind,
                 required, passed
-         FROM tasks WHERE course_id=?1 ORDER BY unit_index, rowid",
+         FROM tasks WHERE account=?1 AND course_id=?2 ORDER BY unit_index, rowid",
     )?;
-    let mut rows = stmt.query([course_id])?;
+    let mut rows = stmt.query(params![account, course_id])?;
     let mut units: Vec<TreeUnit> = Vec::new();
     while let Some(r) = rows.next()? {
         let unit_index: i64 = r.get(0)?;
@@ -521,13 +713,13 @@ pub struct StoredTask {
 }
 
 /// 按 group_id 读取任务及其全部内容（用于预览）。
-pub fn load_stored(conn: &Connection, group_id: &str) -> Result<Option<StoredTask>> {
+pub fn load_stored(conn: &Connection, account: &str, group_id: &str) -> Result<Option<StoredTask>> {
     let mut stmt = conn.prepare(
         "SELECT id, unit_id, unit_index, unit_label, group_id, tab_type, group_type, kind,
                 required, passed, raw_content, raw_json
-         FROM tasks WHERE group_id=?1 ORDER BY id LIMIT 1",
+         FROM tasks WHERE account=?1 AND group_id=?2 ORDER BY id LIMIT 1",
     )?;
-    let mut rows = stmt.query([group_id])?;
+    let mut rows = stmt.query(params![account, group_id])?;
     let Some(r) = rows.next()? else {
         return Ok(None);
     };
@@ -599,9 +791,89 @@ pub fn load_stored(conn: &Connection, group_id: &str) -> Result<Option<StoredTas
     Ok(Some(task))
 }
 
+/// 学习通测验作答结果（按账号/课程隔离）。
+#[derive(Debug, Clone)]
+pub struct QuizResult {
+    pub course_id: String,
+    pub chapter_id: String,
+    pub task_id: String,
+    pub title: String,
+    pub score: Option<f64>,
+    pub total: usize,
+    pub answered: usize,
+    pub updated_at: String,
+}
+
+/// 写入/更新一条学习通测验结果。
+#[allow(clippy::too_many_arguments)]
+pub fn save_quiz_result(
+    conn: &Connection,
+    account: &str,
+    course_id: &str,
+    chapter_id: &str,
+    task_id: &str,
+    title: &str,
+    score: Option<f64>,
+    total: usize,
+    answered: usize,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO quiz_results
+            (account, course_id, chapter_id, task_id, title, score, total, answered, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(account, task_id) DO UPDATE SET
+            course_id=excluded.course_id,
+            chapter_id=excluded.chapter_id,
+            title=excluded.title,
+            score=excluded.score,
+            total=excluded.total,
+            answered=excluded.answered,
+            updated_at=excluded.updated_at",
+        params![
+            account,
+            course_id,
+            chapter_id,
+            task_id,
+            title,
+            score,
+            total as i64,
+            answered as i64,
+            now_local_string()
+        ],
+    )?;
+    Ok(())
+}
+
+/// 读取某账号在某课程下的全部测验结果。
+pub fn load_quiz_results(
+    conn: &Connection,
+    account: &str,
+    course_id: &str,
+) -> Result<Vec<QuizResult>> {
+    let mut stmt = conn.prepare(
+        "SELECT course_id, chapter_id, task_id, title, score, total, answered, updated_at
+         FROM quiz_results WHERE account=?1 AND course_id=?2 ORDER BY updated_at DESC",
+    )?;
+    let mut rows = stmt.query(params![account, course_id])?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next()? {
+        out.push(QuizResult {
+            course_id: r.get(0)?,
+            chapter_id: r.get(1)?,
+            task_id: r.get(2)?,
+            title: r.get(3)?,
+            score: r.get(4)?,
+            total: r.get::<_, i64>(5)? as usize,
+            answered: r.get::<_, i64>(6)? as usize,
+            updated_at: r.get(7)?,
+        });
+    }
+    Ok(out)
+}
+
 /// 从数据库实时生成指定课程的汇总文本（原 _summary.txt 内容）；空库返回 None。
-pub fn summary_text(conn: &Connection, course_id: &str) -> Result<Option<String>> {
-    let total = task_count(conn, course_id)?;
+pub fn summary_text(conn: &Connection, account: &str, course_id: &str) -> Result<Option<String>> {
+    let total = task_count(conn, account, course_id)?;
     if total == 0 {
         return Ok(None);
     }
@@ -767,10 +1039,10 @@ mod tests {
                 error: Some("下载失败".into()),
             },
         ];
-        let id = save_task(&mut c, &input(&group, &vocab, &media)).unwrap();
+        let id = save_task(&mut c, "acc", &input(&group, &vocab, &media)).unwrap();
         assert!(id > 0);
-        assert!(task_exists(&c, "u1", "g1").unwrap());
-        assert_eq!(task_status(&c, "u1", "g1").unwrap(), Some((true, false)));
+        assert!(task_exists(&c, "acc", "u1", "g1").unwrap());
+        assert_eq!(task_status(&c, "acc", "u1", "g1").unwrap(), Some((true, false)));
 
         let module_count: i64 = c
             .query_row("SELECT COUNT(*) FROM modules", [], |r| r.get(0))
@@ -819,14 +1091,14 @@ mod tests {
         let group = ParsedGroup {
             modules: vec![module("basic")],
         };
-        save_task(&mut c, &input(&group, &[], &[])).unwrap();
+        save_task(&mut c, "acc", &input(&group, &[], &[])).unwrap();
         let mut t2 = input(&group, &[], &[]);
         t2.passed = true;
         t2.required = false;
-        save_task(&mut c, &t2).unwrap();
+        save_task(&mut c, "acc", &t2).unwrap();
 
-        assert_eq!(task_count(&c, "course-x").unwrap(), 1);
-        assert_eq!(task_status(&c, "u1", "g1").unwrap(), Some((false, true)));
+        assert_eq!(task_count(&c, "acc", "course-x").unwrap(), 1);
+        assert_eq!(task_status(&c, "acc", "u1", "g1").unwrap(), Some((false, true)));
         let module_count: i64 = c
             .query_row("SELECT COUNT(*) FROM modules", [], |r| r.get(0))
             .unwrap();
@@ -839,13 +1111,13 @@ mod tests {
         let group = ParsedGroup {
             modules: vec![module("basic")],
         };
-        save_task(&mut c, &input(&group, &[], &[])).unwrap();
-        assert!(set_passed(&c, "u1", "g1", true).unwrap());
-        assert_eq!(task_status(&c, "u1", "g1").unwrap(), Some((true, true)));
-        assert!(!set_passed(&c, "u9", "g9", true).unwrap());
+        save_task(&mut c, "acc", &input(&group, &[], &[])).unwrap();
+        assert!(set_passed(&c, "acc", "u1", "g1", true).unwrap());
+        assert_eq!(task_status(&c, "acc", "u1", "g1").unwrap(), Some((true, true)));
+        assert!(!set_passed(&c, "acc", "u9", "g9", true).unwrap());
 
-        clear_all(&c).unwrap();
-        assert_eq!(task_count(&c, "course-x").unwrap(), 0);
+        clear_all(&c, "acc").unwrap();
+        assert_eq!(task_count(&c, "acc", "course-x").unwrap(), 0);
         let modules: i64 = c
             .query_row("SELECT COUNT(*) FROM modules", [], |r| r.get(0))
             .unwrap();
@@ -873,7 +1145,7 @@ mod tests {
             vocab: &[],
             media: &[],
         };
-        save_task(&mut c, &t).unwrap();
+        save_task(&mut c, "acc", &t).unwrap();
         let raw: String = c
             .query_row("SELECT raw_content FROM tasks WHERE group_id='g2'", [], |r| {
                 r.get(0)
@@ -885,20 +1157,20 @@ mod tests {
     #[test]
     fn summary_text_empty_and_filled() {
         let mut c = conn();
-        assert!(summary_text(&c, "course-x").unwrap().is_none());
+        assert!(summary_text(&c, "acc", "course-x").unwrap().is_none());
 
         let group = ParsedGroup {
             modules: vec![module("basic")],
         };
-        save_task(&mut c, &input(&group, &[], &[])).unwrap();
+        save_task(&mut c, "acc", &input(&group, &[], &[])).unwrap();
         let mut t2 = input(&group, &[], &[]);
         t2.group_id = "g2";
         t2.tab_type = "text";
         t2.required = false;
         t2.passed = true;
-        save_task(&mut c, &t2).unwrap();
+        save_task(&mut c, "acc", &t2).unwrap();
 
-        let text = summary_text(&c, "course-x").unwrap().unwrap();
+        let text = summary_text(&c, "acc", "course-x").unwrap().unwrap();
         assert!(text.contains("任务组: 2 个"), "{}", text);
         assert!(text.contains("必修: 1 (已完成 0, 未完成 1)"), "{}", text);
         assert!(text.contains("选修: 1 (已完成 1, 未完成 0)"), "{}", text);
@@ -938,8 +1210,8 @@ mod tests {
         assert!(cols.contains(&"raw_json".to_string()), "{:?}", cols);
         assert!(cols.contains(&"course_id".to_string()), "{:?}", cols);
         // meta 表同时可用
-        save_meta(&c, "k", "v").unwrap();
-        assert_eq!(get_meta(&c, "k").unwrap().as_deref(), Some("v"));
+        save_meta(&c, "acc", "k", "v").unwrap();
+        assert_eq!(get_meta(&c, "acc", "k").unwrap().as_deref(), Some("v"));
     }
 
     #[test]
@@ -964,11 +1236,11 @@ mod tests {
         let group = ParsedGroup {
             modules: vec![module("basic")],
         };
-        save_task(&mut c1, &input(&group, &[], &[])).unwrap();
+        save_task(&mut c1, "acc", &input(&group, &[], &[])).unwrap();
         let c2 = open_path(&p2).unwrap();
-        assert_eq!(task_count(&c1, "course-x").unwrap(), 1);
-        assert_eq!(task_count(&c2, "course-x").unwrap(), 0, "双文件必须互相隔离");
-        assert!(load_tree(&c2, "course-x").unwrap().is_empty());
+        assert_eq!(task_count(&c1, "acc", "course-x").unwrap(), 1);
+        assert_eq!(task_count(&c2, "acc", "course-x").unwrap(), 0, "双文件必须互相隔离");
+        assert!(load_tree(&c2, "acc", "course-x").unwrap().is_empty());
         drop(c1);
         drop(c2);
         let _ = std::fs::remove_dir_all(&dir);
@@ -980,32 +1252,32 @@ mod tests {
         let group = ParsedGroup {
             modules: vec![module("basic")],
         };
-        save_task(&mut c, &input(&group, &[], &[])).unwrap();
+        save_task(&mut c, "acc", &input(&group, &[], &[])).unwrap();
         let mut t2 = input(&group, &[], &[]);
         t2.group_id = "g2";
         t2.course_id = "course-y";
-        save_task(&mut c, &t2).unwrap();
+        save_task(&mut c, "acc", &t2).unwrap();
 
-        let units = load_tree(&c, "course-x").unwrap();
+        let units = load_tree(&c, "acc", "course-x").unwrap();
         assert_eq!(units.len(), 1);
         assert_eq!(units[0].tasks.len(), 1);
         assert_eq!(units[0].tasks[0].group_id, "g1");
 
-        let units = load_tree(&c, "course-y").unwrap();
+        let units = load_tree(&c, "acc", "course-y").unwrap();
         assert_eq!(units.len(), 1);
         assert_eq!(units[0].tasks[0].group_id, "g2");
 
-        assert!(load_tree(&c, "course-z").unwrap().is_empty());
-        assert_eq!(task_count(&c, "course-z").unwrap(), 0);
+        assert!(load_tree(&c, "acc", "course-z").unwrap().is_empty());
+        assert_eq!(task_count(&c, "acc", "course-z").unwrap(), 0);
     }
 
     #[test]
     fn meta_roundtrip() {
         let c = conn();
-        assert!(get_meta(&c, "course_name").unwrap().is_none());
-        save_meta(&c, "course_name", "新视野").unwrap();
-        save_meta(&c, "course_name", "新视野2").unwrap();
-        assert_eq!(get_meta(&c, "course_name").unwrap().as_deref(), Some("新视野2"));
+        assert!(get_meta(&c, "acc", "course_name").unwrap().is_none());
+        save_meta(&c, "acc", "course_name", "新视野").unwrap();
+        save_meta(&c, "acc", "course_name", "新视野2").unwrap();
+        assert_eq!(get_meta(&c, "acc", "course_name").unwrap().as_deref(), Some("新视野2"));
     }
 
     #[test]
@@ -1019,24 +1291,24 @@ mod tests {
         t1.unit_id = "u2";
         t1.unit_label = None;
         t1.group_id = "g2";
-        save_task(&mut c, &t1).unwrap();
+        save_task(&mut c, "acc", &t1).unwrap();
         // u1 首行无标签（view-only 场景），后续行有标签 → 应回填
         let mut t0 = input(&group, &[], &[]);
         t0.unit_index = 1;
         t0.unit_label = None;
         t0.group_id = "g0";
-        save_task(&mut c, &t0).unwrap();
+        save_task(&mut c, "acc", &t0).unwrap();
         let mut t2 = input(&group, &[], &[]);
         t2.unit_index = 1;
         t2.passed = true;
-        save_task(&mut c, &t2).unwrap();
+        save_task(&mut c, "acc", &t2).unwrap();
         let mut t3 = input(&group, &[], &[]);
         t3.unit_index = 1;
         t3.group_id = "g1b";
         t3.required = false;
-        save_task(&mut c, &t3).unwrap();
+        save_task(&mut c, "acc", &t3).unwrap();
 
-        let units = load_tree(&c, "course-x").unwrap();
+        let units = load_tree(&c, "acc", "course-x").unwrap();
         assert_eq!(units.len(), 2);
         assert_eq!(units[0].unit_id, "u1");
         assert_eq!(units[0].unit_label.as_deref(), Some("Unit 1"));
@@ -1068,9 +1340,9 @@ mod tests {
             text: Some("t".into()),
             error: None,
         }];
-        save_task(&mut c, &input(&group, &vocab, &media)).unwrap();
+        save_task(&mut c, "acc", &input(&group, &vocab, &media)).unwrap();
 
-        let st = load_stored(&c, "g1").unwrap().unwrap();
+        let st = load_stored(&c, "acc", "g1").unwrap().unwrap();
         assert_eq!(st.group_id, "g1");
         assert_eq!(st.kind, "task");
         assert_eq!(st.raw_json.as_deref(), Some("{\n  \"demo\": true\n}"));
@@ -1087,6 +1359,6 @@ mod tests {
             vec![("apple".to_string(), "http://s/a.mp3".to_string())]
         );
 
-        assert!(load_stored(&c, "missing").unwrap().is_none());
+        assert!(load_stored(&c, "acc", "missing").unwrap().is_none());
     }
 }

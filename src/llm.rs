@@ -6,7 +6,11 @@ use crate::api::session::Session;
 
 /// 调用 OpenAI 兼容接口（DeepSeek / Moonshot / Kimi 等）获取回答。
 pub async fn ask(session: &Session, system: &str, prompt: &str) -> Result<String> {
-    let cfg = session.cfg();
+    ask_with(session.cfg(), system, prompt).await
+}
+
+/// 与 [`ask`] 相同，但直接接收配置（供非 Unipus 平台复用）。
+pub async fn ask_with(cfg: &crate::config::Config, system: &str, prompt: &str) -> Result<String> {
     let base = normalize_base(&cfg.base_url);
     let url = format!("{}/chat/completions", base);
 

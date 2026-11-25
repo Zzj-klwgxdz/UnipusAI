@@ -352,7 +352,7 @@ impl Session {
             cfg.rt_expire = live.rt_expire;
         }
         {
-            let mut a = self.auth.write().unwrap();
+            let mut a = self.auth.write().unwrap_or_else(|e| e.into_inner());
             a.annotator = cfg.x_annotator_auth_token.clone();
             if !cfg.open_id.is_empty() {
                 a.open_id = cfg.open_id.clone();
@@ -368,7 +368,7 @@ impl Session {
         let _guard = self.refresh_lock.lock().await;
         let cfg = self.cfg.clone();
         {
-            let a = self.auth.read().unwrap();
+            let a = self.auth.read().unwrap_or_else(|e| e.into_inner());
             let jwt = if a.jwt.is_empty() {
                 cfg.cookie_jwt().unwrap_or_default()
             } else {
@@ -380,7 +380,7 @@ impl Session {
         }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let (rt, rt_expire) = {
-            let a = self.auth.read().unwrap();
+            let a = self.auth.read().unwrap_or_else(|e| e.into_inner());
             (
                 if a.refresh_token.is_empty() {
                     cfg.refresh_token.clone()
@@ -413,7 +413,7 @@ impl Session {
             return Ok(false);
         };
         {
-            let mut a = self.auth.write().unwrap();
+            let mut a = self.auth.write().unwrap_or_else(|e| e.into_inner());
             a.jwt = c.jwt.clone();
             a.cookie = format!("jwt={}", c.jwt);
             if !c.open_id.is_empty() {
@@ -474,12 +474,32 @@ impl Session {
 }
 
 fn check_code(v: &Value) -> Result<()> {
-    let code = v.get("code").and_then(|c| c.as_i64());
-    if code.is_some_and(|c| c != 0) {
-        let msg = v.get("msg").and_then(|m| m.as_str()).unwrap_or("");
-        anyhow::bail!("接口返回错误 code={} msg={}", code.unwrap(), msg);
+    match v.get("code").and_then(|c| c.as_i64()) {
+        Some(code) if code != 0 => {
+            let msg = v.get("msg").and_then(|m| m.as_str()).unwrap_or("");
+            anyhow::bail!("接口返回错误 code={} msg={}", code, msg)
+        }
+        _ => Ok(()),
     }
-    Ok(())
+}
+
+/// 构造请求头值；配置项含换行等控制字符（常见于手动粘贴 cookie）时返回 None 并告警。
+/// 直接 `HeaderValue::from_str(..).unwrap()` 会让程序在启动时 panic。
+/// 注意：http 允许值中出现 obs-text（≥0x80，如中文），只有控制字符才会被拒绝。
+fn header_value(field: &str, value: &str) -> Option<reqwest::header::HeaderValue> {
+    if value.is_empty() {
+        return None;
+    }
+    match reqwest::header::HeaderValue::from_str(value) {
+        Ok(v) => Some(v),
+        Err(_) => {
+            log::warn!(
+                "config.json 的 {} 含换行等控制字符，已忽略对应请求头；请检查该配置项",
+                field
+            );
+            None
+        }
+    }
 }
 
 fn build_client(cfg: &Config) -> Result<reqwest::Client> {
@@ -493,11 +513,8 @@ fn build_client(cfg: &Config) -> Result<reqwest::Client> {
 
 fn build_base_headers(cfg: &Config) -> reqwest::header::HeaderMap {
     let mut map = reqwest::header::HeaderMap::new();
-    if !cfg.cookie.is_empty() {
-        map.insert(
-            "cookie",
-            reqwest::header::HeaderValue::from_str(cfg.cookie.as_str()).unwrap(),
-        );
+    if let Some(v) = header_value("cookie", &cfg.cookie) {
+        map.insert("cookie", v);
     }
     // authorization 为空时回退到 cookie 中的 jwt（浏览器两者是同一个 token）。
     let authorization = if cfg.authorization.is_empty() {
@@ -506,36 +523,22 @@ fn build_base_headers(cfg: &Config) -> reqwest::header::HeaderMap {
         Some(cfg.authorization.clone())
     };
     if let Some(auth) = authorization
-        && !auth.is_empty()
+        && let Some(v) = header_value("authorization", &auth)
     {
-        map.insert(
-            "authorization",
-            reqwest::header::HeaderValue::from_str(auth.as_str()).unwrap(),
-        );
+        map.insert("authorization", v);
     }
-    if !cfg.x_annotator_auth_token.is_empty() {
-        map.insert(
-            "x-annotator-auth-token",
-            reqwest::header::HeaderValue::from_str(cfg.x_annotator_auth_token.as_str()).unwrap(),
-        );
+    if let Some(v) = header_value("x_annotator_auth_token", &cfg.x_annotator_auth_token) {
+        map.insert("x-annotator-auth-token", v);
     }
-    if !cfg.open_id.is_empty() {
-        map.insert(
-            "u-openid",
-            reqwest::header::HeaderValue::from_str(cfg.open_id.as_str()).unwrap(),
-        );
-        map.insert(
-            "x-csrftoken",
-            reqwest::header::HeaderValue::from_str(cfg.open_id.as_str()).unwrap(),
-        );
+    // open_id 同时用于 u-openid 与 x-csrftoken（值相同）。
+    if let Some(v) = header_value("open_id", &cfg.open_id) {
+        map.insert("u-openid", v.clone());
+        map.insert("x-csrftoken", v);
     }
     map.insert("u-app-id", reqwest::header::HeaderValue::from_static("39"));
     map.insert("u-platform", reqwest::header::HeaderValue::from_static("2"));
-    if !cfg.u_school.is_empty() {
-        map.insert(
-            "u-school",
-            reqwest::header::HeaderValue::from_str(cfg.u_school.as_str()).unwrap(),
-        );
+    if let Some(v) = header_value("u_school", &cfg.u_school) {
+        map.insert("u-school", v);
     }
     map.insert(
         "appid",
@@ -598,4 +601,56 @@ pub fn user_module_url(course: &str, group_id: &str, ts: i64) -> String {
         "{}/api/mobile/user_module/{}/{}-{}",
         UCONTENT, course, group_id, ts
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_headers_skip_invalid_values() {
+        // 手动粘贴的 cookie 常带换行（控制字符），构造请求头失败时不能 panic。
+        let mut cfg = Config::default();
+        cfg.unipusai.cookie = "jwt=abc\nX".to_string();
+        cfg.unipusai.authorization = "bad\nvalue".to_string();
+        cfg.unipusai.open_id = "openid\n123".to_string();
+        cfg.unipusai.u_school = "8320".to_string();
+        cfg.unipusai.x_annotator_auth_token = "ok-token".to_string();
+        let h = build_base_headers(&cfg);
+        assert!(h.get("cookie").is_none(), "含换行的 cookie 应被跳过");
+        assert!(
+            h.get("authorization").is_none(),
+            "含换行的 authorization 应被跳过"
+        );
+        assert!(h.get("u-openid").is_none(), "含换行的 open_id 应被跳过");
+        assert!(h.get("x-csrftoken").is_none());
+        // 合法值照常注入，固定头始终存在
+        assert_eq!(h.get("u-school").unwrap().to_str().unwrap(), "8320");
+        assert_eq!(
+            h.get("x-annotator-auth-token").unwrap().to_str().unwrap(),
+            "ok-token"
+        );
+        assert_eq!(h.get("u-app-id").unwrap().to_str().unwrap(), "39");
+    }
+
+    #[test]
+    fn base_headers_keep_non_ascii_values() {
+        // obs-text（≥0x80）是合法头值：中文只会在服务端被拒，不应在本地 panic。
+        let mut cfg = Config::default();
+        cfg.unipusai.open_id = "中文openid".to_string();
+        let h = build_base_headers(&cfg);
+        assert!(h.get("u-openid").is_some());
+        assert!(h.get("x-csrftoken").is_some());
+    }
+
+    #[test]
+    fn base_headers_accept_normal_values() {
+        let mut cfg = Config::default();
+        cfg.unipusai.cookie = "jwt=abc.def".to_string();
+        cfg.unipusai.open_id = "openid123".to_string();
+        let h = build_base_headers(&cfg);
+        assert_eq!(h.get("cookie").unwrap().to_str().unwrap(), "jwt=abc.def");
+        assert_eq!(h.get("u-openid").unwrap().to_str().unwrap(), "openid123");
+        assert_eq!(h.get("x-csrftoken").unwrap().to_str().unwrap(), "openid123");
+    }
 }

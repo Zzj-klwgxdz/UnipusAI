@@ -6,10 +6,32 @@ use ratatui::widgets::{
     Block, Borders, Clear, Gauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
 };
 
-use super::app::{App, ButtonId, FieldKind, FIELDS, MouseAction, Screen};
+use super::app::{App, ButtonId, FieldKind, FIELDS, MouseAction, PlatformTab, Screen};
 
 pub fn render(f: &mut Frame, app: &mut App) {
     app.mouse_map.clear();
+    match app.tab {
+        PlatformTab::Chaoxing => {
+            // 学习通标签页：顶部留一行给标签栏
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(0)])
+                .split(f.area());
+            render_tabbar(f, chunks[0], app);
+            crate::tui::cx::render(f, chunks[1], &mut app.cx);
+            return;
+        }
+        PlatformTab::Zhihuishu => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(0)])
+                .split(f.area());
+            render_tabbar(f, chunks[0], app);
+            crate::tui::zhs::render(f, chunks[1], &mut app.zs);
+            return;
+        }
+        PlatformTab::Unipus => {}
+    }
     match app.screen {
         Screen::Dashboard => render_dashboard(f, app),
         Screen::Settings => render_settings(f, app),
@@ -24,11 +46,65 @@ pub fn render(f: &mut Frame, app: &mut App) {
     if let Some(confirm) = &app.confirm {
         render_confirm(f, &confirm.prompt);
     }
+    // U 校园内容占满整屏，标签栏叠加在首行右侧
+    render_tabbar(f, f.area(), app);
+}
+
+/// 顶部标签栏：F1 U 校园 / F2 学习通 / F3 知到（类似浏览器标签页）。
+fn render_tabbar(f: &mut Frame, area: Rect, app: &mut App) {
+    let active = app.tab;
+    let tabs = [
+        (PlatformTab::Unipus, "F1 U校园"),
+        (PlatformTab::Chaoxing, "F2 学习通"),
+        (PlatformTab::Zhihuishu, "F3 知到"),
+    ];
+    let mut spans: Vec<Span> = Vec::new();
+    let mut x = area.x;
+    for (tab, label) in tabs {
+        let style = if tab == active {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let text = format!(" {} ", label);
+        let w = display_width(&text);
+        if x + w <= area.x + area.width {
+            app.mouse_map.push((
+                Rect {
+                    x,
+                    y: area.y,
+                    width: w,
+                    height: 1,
+                },
+                MouseAction::SwitchTab(tab),
+            ));
+        }
+        x += w;
+        spans.push(Span::styled(text, style));
+        spans.push(Span::raw(" "));
+    }
+    spans.push(Span::styled(
+        "  Ctrl+C 退出 ",
+        Style::default().fg(Color::DarkGray),
+    ));
+    let line = Line::from(spans);
+    let rect = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 1,
+    };
+    f.render_widget(Paragraph::new(line).alignment(Alignment::Right), rect);
 }
 
 fn render_dashboard(f: &mut Frame, app: &mut App) {
     let running = app.run.as_ref().is_some_and(|r| !r.finished);
-    let top_h = if running { 4 } else { 3 };
+    let has_score = app.last_score.is_some();
+    let extra: u16 = (if running { 1 } else { 0 }) + (if has_score { 1 } else { 0 });
+    let top_h = 3 + extra;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -115,8 +191,14 @@ fn render_top(f: &mut Frame, app: &App, area: Rect, running: bool) {
             done as f64 / total as f64
         })
         .label(format!("{}/{}", done, total));
-    f.render_widget(gauge, area);
+    // 仪表盘固定 3 行；运行状态与最近得分各占一行（在仪表盘下方）。
+    let gauge_area = Rect {
+        height: area.height.min(3),
+        ..area
+    };
+    f.render_widget(gauge, gauge_area);
 
+    let mut y = area.y + gauge_area.height;
     if running && let Some(run) = &app.run {
         let line = Line::from(vec![
             Span::styled(" 运行中: ", Style::default().fg(Color::Yellow)),
@@ -133,14 +215,39 @@ fn render_top(f: &mut Frame, app: &App, area: Rect, running: bool) {
             ),
             Span::styled("   Esc 取消", Style::default().fg(Color::DarkGray)),
         ]);
-        let para = Paragraph::new(line);
-        let line_area = Rect {
-            x: area.x + 1,
-            y: area.y + area.height.saturating_sub(1),
-            width: area.width.saturating_sub(2),
-            height: 1,
-        };
-        f.render_widget(para, line_area);
+        render_top_line(f, area, y, line);
+        y += 1;
+    }
+    if let Some((gid, score)) = &app.last_score {
+        let line = Line::from(vec![
+            Span::styled(" 最近提交得分: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("{} ", gid)),
+            Span::styled(score.display(), score_style(score.percent)),
+        ]);
+        render_top_line(f, area, y, line);
+    }
+}
+
+/// 在仪表盘区域内绘制一行附加文本（自动裁剪到底栏范围）。
+fn render_top_line(f: &mut Frame, area: Rect, y: u16, line: Line<'_>) {
+    if y >= area.y + area.height {
+        return;
+    }
+    let line_area = Rect {
+        x: area.x + 1,
+        y,
+        width: area.width.saturating_sub(2),
+        height: 1,
+    };
+    f.render_widget(Paragraph::new(line), line_area);
+}
+
+fn score_style(percent: Option<f64>) -> Style {
+    match percent {
+        Some(p) if p >= 99.95 => Style::default().fg(Color::Green),
+        Some(p) if p > 0.0 => Style::default().fg(Color::Yellow),
+        Some(_) => Style::default().fg(Color::Red),
+        None => Style::default().fg(Color::Gray),
     }
 }
 
@@ -357,6 +464,12 @@ fn render_footer(
         rows[0],
     );
     render_buttons(f, app, rows[1], buttons, each);
+}
+
+fn display_width(s: &str) -> u16 {
+    s.chars()
+        .map(|c| if c.is_ascii() { 1 } else { 2 })
+        .sum()
 }
 
 fn truncate_display(s: &str, max: usize) -> String {
@@ -693,6 +806,11 @@ fn render_help(f: &mut Frame) {
     let lines = vec![
         Line::from("UnipusAI TUI 帮助（任意键返回）"),
         Line::from(""),
+        Line::from("F1 / F2 / F3 切换平台标签页（U校园 / 学习通 / 知到，互不干扰）"),
+        Line::from("学习通 / 知到当前不稳定、暂不可用；仅 U校园 可正常使用"),
+        Line::from("学习通页：j/k 选择，Enter 加载章节/任务，t 刷新任务，a 运行作答"),
+        Line::from("知到页：j/k 选择，Tab 切换章节/作业，r 加载，v/V 视频补报，s 已提交"),
+        Line::from(""),
         Line::from("↑/↓ j/k      移动选择"),
         Line::from("←/→ h/l      折叠/展开单元"),
         Line::from("Tab          切换焦点（树/详情/日志）"),
@@ -850,6 +968,43 @@ mod tests {
     }
 
     #[test]
+    fn chaoxing_tab_renders() {
+        let mut app = test_app();
+        app.tab = PlatformTab::Chaoxing;
+        app.cx.status = "测试".into();
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| super::render(f, &mut app))
+            .expect("学习通标签页渲染不应 panic");
+        let text = compact(&buffer_text(terminal.backend()));
+        assert!(text.contains("学习通"), "标题应出现");
+        assert!(text.contains("F1") && text.contains("F2"), "标签栏应显示 F1/F2");
+        assert!(text.contains("测验"), "底栏应显示按键提示");
+    }
+
+
+    #[test]
+    fn zhihuishu_tab_renders() {
+        let mut app = test_app();
+        app.tab = PlatformTab::Zhihuishu;
+        app.zs.status = "测试".into();
+        app.zs.push_log("知到日志");
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| super::render(f, &mut app))
+            .expect("知到标签页渲染不应 panic");
+        let text = compact(&buffer_text(terminal.backend()));
+        assert!(text.contains("知到"), "标题应出现");
+        assert!(
+            text.contains("F1") && text.contains("F3"),
+            "标签栏应显示 F1/F3"
+        );
+        assert!(text.contains("暂不可用"), "底栏应显示按键提示");
+    }
+
+    #[test]
     fn renders_all_screens_without_panic() {
         let mut app = test_app();
         draw(&mut app);
@@ -894,6 +1049,22 @@ mod tests {
         });
         app.screen = Screen::Dashboard;
         draw(&mut app);
+    }
+
+    #[test]
+    fn dashboard_renders_last_submit_score() {
+        let mut app = test_app();
+        app.last_score = Some((
+            "6654be8010310bf".into(),
+            crate::api::submit::SubmitScore {
+                items: vec![1.0; 6],
+                percent: Some(100.0),
+            },
+        ));
+        let text = compact(&render_text(&mut app));
+        assert!(text.contains("最近提交得分"), "text:\n{}", text);
+        assert!(text.contains("6654be8010310bf"), "text:\n{}", text);
+        assert!(text.contains("100%"), "text:\n{}", text);
     }
 
     #[test]

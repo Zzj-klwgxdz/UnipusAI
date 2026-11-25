@@ -193,13 +193,13 @@ async fn fetch_unit_label(session: &Session, unit_id: &str) -> Result<Option<Str
 pub async fn unit_label(session: &Session, unit_id: &str) -> Result<Option<String>> {
     let key = label_cache_key(session, unit_id);
     {
-        let guard = labels().lock().unwrap();
+        let guard = labels().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(label) = guard.as_ref().and_then(|m| m.get(&key)) {
             return Ok(Some(label.clone()));
         }
     }
     if let Some(label) = fetch_unit_label(session, unit_id).await? {
-        let mut guard = labels().lock().unwrap();
+        let mut guard = labels().lock().unwrap_or_else(|e| e.into_inner());
         let map = guard.get_or_insert_with(BTreeMap::new);
         map.insert(key, label.clone());
         if let Ok(json) = serde_json::to_string_pretty(map) {

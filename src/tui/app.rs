@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::api::course::GroupTask;
 use crate::api::session::Session;
+use crate::api::submit::SubmitScore;
 use crate::config::Config;
 use crate::db;
 use crate::dump_text::{DumpOptions, DumpSummary};
@@ -21,6 +22,24 @@ pub enum Screen {
     Preview,
     Courses,
     Help,
+}
+
+/// 平台标签页（类似浏览器标签，互不干扰）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlatformTab {
+    Unipus,
+    Chaoxing,
+    Zhihuishu,
+}
+
+impl PlatformTab {
+    pub fn title(self) -> &'static str {
+        match self {
+            PlatformTab::Unipus => "U校园",
+            PlatformTab::Chaoxing => "学习通",
+            PlatformTab::Zhihuishu => "知到",
+        }
+    }
 }
 
 /// 主界面焦点。
@@ -96,6 +115,7 @@ pub const FIELDS: &[FieldDef] = &[
     FieldDef { label: "learning_strategy", kind: FieldKind::Strategy },
     FieldDef { label: "max_tokens", kind: FieldKind::U64 },
     FieldDef { label: "temperature", kind: FieldKind::F32 },
+    FieldDef { label: "llm_votes(1-9)", kind: FieldKind::U64 },
     FieldDef { label: "fallback_on_llm_failure", kind: FieldKind::Bool },
     FieldDef { label: "interval_ms", kind: FieldKind::U64 },
     FieldDef { label: "whisper_enabled", kind: FieldKind::Bool },
@@ -147,6 +167,7 @@ impl SettingsState {
             13 => c.learning_strategy.clone(),
             14 => c.max_tokens.to_string(),
             15 => c.temperature.to_string(),
+            23 => c.llm_votes.to_string(),
             16 => c.fallback_on_llm_failure.to_string(),
             17 => c.interval_ms.to_string(),
             18 => c.whisper_enabled.to_string(),
@@ -177,6 +198,7 @@ impl SettingsState {
             13 => c.learning_strategy = v.to_string(),
             14 => c.max_tokens = v.trim().parse().unwrap_or(c.max_tokens),
             15 => c.temperature = v.trim().parse().unwrap_or(c.temperature),
+            23 => c.llm_votes = v.trim().parse().unwrap_or(c.llm_votes),
             16 => c.fallback_on_llm_failure = v.trim() == "true",
             17 => c.interval_ms = v.trim().parse().unwrap_or(c.interval_ms),
             18 => c.whisper_enabled = v.trim() == "true",
@@ -232,6 +254,8 @@ pub enum MouseAction {
     SelectTask(usize, usize),
     Button(ButtonId),
     Field(usize),
+    /// 点击顶部标签栏切换平台标签页
+    SwitchTab(PlatformTab),
 }
 
 /// 底栏按钮。
@@ -276,6 +300,10 @@ pub enum AppEvent {
     DraftDone(Result<String, String>),
     /// 课程列表加载完成
     CoursesLoaded(Result<Vec<crate::api::course::HomeCourse>, String>),
+    /// 学习通标签页事件（与 U 校园互不干扰）
+    Cx(crate::tui::cx::CxEvent),
+    /// 知到标签页事件
+    Zs(crate::tui::zhs::ZsEvent),
     /// 后台登录/刷新完成（回填 Session 与结果）
     SessionReady(Box<Session>, Result<bool, String>),
     ConfigSaved(Result<(), String>),
@@ -297,6 +325,8 @@ pub struct App {
     pub log_scroll: usize,
     pub log_auto: bool,
     pub run: Option<RunState>,
+    /// 最近一次作答提交的得分（gid, score）；启动/换课时从数据库加载。
+    pub last_score: Option<(String, SubmitScore)>,
     pub settings: SettingsState,
     pub dump_text: Option<String>,
     pub dump_scroll: usize,
@@ -309,11 +339,41 @@ pub struct App {
     pub mouse_map: Vec<(ratatui::layout::Rect, MouseAction)>,
     pub tick: u64,
     pub loading_tree: bool,
+    /// 当前激活的平台标签页。
+    pub tab: PlatformTab,
+    /// 学习通标签页的状态。
+    pub cx: crate::tui::cx::CxState,
+    pub zs: crate::tui::zhs::ZsState,
+}
+
+/// 从当前账号数据库读取该课程最近一次作答得分（按课程隔离）。
+pub fn load_last_score(session: &Session) -> Option<(String, SubmitScore)> {
+    let conn = db::open_site(db::SITE_UNIPUS).ok()?;
+    let key = format!("last_score:{}", session.course_id());
+    let raw = db::get_meta(&conn, &session.open_id(), &key).ok().flatten()?;
+    parse_last_score(&raw)
+}
+
+/// 解析数据库 meta 中保存的最近得分 JSON。
+fn parse_last_score(raw: &str) -> Option<(String, SubmitScore)> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let group_id = v.get("group_id")?.as_str()?.to_string();
+    let percent = v.get("percent").and_then(|x| x.as_f64());
+    let items: Vec<f64> = v
+        .get("items")
+        .and_then(|x| x.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_f64()).collect())
+        .unwrap_or_default();
+    if percent.is_none() && items.is_empty() {
+        return None;
+    }
+    Some((group_id, SubmitScore { items, percent }))
 }
 
 impl App {
     pub fn new(session: Session) -> Self {
         let settings = SettingsState::new(session.cfg());
+        let last_score = load_last_score(&session);
         Self {
             screen: Screen::Dashboard,
             quit: false,
@@ -327,6 +387,7 @@ impl App {
             log_scroll: 0,
             log_auto: true,
             run: None,
+            last_score,
             settings,
             dump_text: None,
             dump_scroll: 0,
@@ -339,6 +400,9 @@ impl App {
             mouse_map: Vec::new(),
             tick: 0,
             loading_tree: false,
+            tab: PlatformTab::Unipus,
+            cx: crate::tui::cx::CxState::default(),
+            zs: crate::tui::zhs::ZsState::default(),
         }
     }
 
@@ -415,10 +479,10 @@ impl App {
         let tx = tx.clone();
         tokio::spawn(async move {
             let res = (|| -> anyhow::Result<(Option<String>, Vec<UnitUi>)> {
-                let conn = db::open_for(&open_id)?;
-                let name = db::get_meta(&conn, &format!("course_name:{}", course_id))?
-                    .or(db::get_meta(&conn, "course_name")?);
-                let units = db::load_tree(&conn, &course_id)?
+                let conn = db::open_site(db::SITE_UNIPUS)?;
+                let name = db::get_meta(&conn, &open_id, &format!("course_name:{}", course_id))?
+                    .or(db::get_meta(&conn, &open_id, "course_name")?);
+                let units = db::load_tree(&conn, &open_id, &course_id)?
                     .into_iter()
                     .map(|u| {
                         let uid = u.unit_id;
@@ -455,6 +519,7 @@ impl App {
     /// 重新加载任务树（刷新通过状态等）。
     pub fn refresh(&mut self, tx: &UnboundedSender<AppEvent>) {
         self.loading_tree = false;
+        self.last_score = load_last_score(&self.session);
         self.spawn_load_tree(tx);
         self.status = "刷新中…".into();
     }
@@ -493,10 +558,17 @@ impl App {
                     let r = crate::core::runner::process_group(&session, &task, &*reporter, &cancel)
                         .await;
                     match r {
-                        Ok(_) => {
+                        Ok(crate::core::runner::ProcessResult::Submitted { .. }) => {
                             let _ = tx2.send(AppEvent::Report(ReportEvent::RunFinished {
                                 done: 1,
                                 skipped: 0,
+                                failed: 0,
+                            }));
+                        }
+                        Ok(crate::core::runner::ProcessResult::Skipped { .. }) => {
+                            let _ = tx2.send(AppEvent::Report(ReportEvent::RunFinished {
+                                done: 0,
+                                skipped: 1,
                                 failed: 0,
                             }));
                         }
@@ -586,7 +658,7 @@ impl App {
                 Err(e) => {
                     let msg = format!(
                         "读取 {} 失败: {:#}",
-                        crate::dump::db_path_for(&open_id).display(),
+                        db::db_path_for_site(db::SITE_UNIPUS).display(),
                         e
                     );
                     AppEvent::DumpText(Err(msg))
@@ -766,4 +838,28 @@ pub enum RunScope {
     Task(Box<GroupTask>),
     Unit(String),
     All,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_persisted_last_score() {
+        let (gid, score) = parse_last_score(
+            r#"{"group_id":"6654be8010310bf","items":[1.0,0.5],"percent":75.0,"updated_at":"x"}"#,
+        )
+        .unwrap();
+        assert_eq!(gid, "6654be8010310bf");
+        assert_eq!(score.percent, Some(75.0));
+        assert_eq!(score.items, vec![1.0, 0.5]);
+        assert_eq!(score.display(), "75%（各题 1/0.5）");
+    }
+
+    #[test]
+    fn rejects_empty_or_invalid_last_score() {
+        assert!(parse_last_score("not json").is_none());
+        assert!(parse_last_score(r#"{"group_id":"g1","items":[],"percent":null}"#).is_none());
+        assert!(parse_last_score(r#"{"items":[1.0]}"#).is_none());
+    }
 }

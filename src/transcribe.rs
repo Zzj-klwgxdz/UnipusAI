@@ -96,14 +96,16 @@ fn whisper_infer(wav: &PathBuf, model: &str, language: &str) -> Result<String> {
         }
     };
 
-    let mut guard = cache.lock().unwrap();
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
     if guard.as_ref().map(|(m, _)| m != model).unwrap_or(true) {
         log::info!("加载 whisper 模型: {model}");
         let loaded = load_whisper_model(model, &device)
             .with_context(|| format!("加载 whisper 模型 {model} 失败"))?;
         *guard = Some((model.to_string(), loaded));
     }
-    let (_, wp_model) = guard.as_mut().unwrap();
+    let Some((_, wp_model)) = guard.as_mut() else {
+        anyhow::bail!("whisper 模型未初始化");
+    };
 
     let mut options = whisper_core::TranscribeOptions::default();
     options.decode_options.language = lang_opt;

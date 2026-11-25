@@ -1,4 +1,4 @@
-use crate::api::parser::{ChildQ, Module, OptionItem, truncate_text};
+use crate::api::parser::{ChildQ, Module, OptionItem, strip_html, truncate_text};
 use crate::api::session::Session;
 use crate::llm;
 use anyhow::{Result, bail};
@@ -7,8 +7,202 @@ const SYSTEM_PROMPT: &str = "你是一个专业的英语教学助手，擅长分
 请根据题目要求给出准确答案，注意区分不同题型：\
 词汇匹配题根据英文选中文或根据中文选英文；选词填空选择最合适的单词；阅读理解基于文章内容作答。";
 
-/// 逐个模块求解，返回每个子题的作答值（按 children 顺序）。
+/// 已适配的 replyType（可生成答案或明确无需作答）。
+/// 容器模块（reply_type 为空，如 video-popup/exit-ticket）由子题类型决定是否适配。
+pub const KNOWN_REPLY_TYPES: &[&str] = &[
+    "singlechoice",
+    "multichoice",
+    "fillblank",
+    "text-area",
+    "bankedcloze",
+    "dropdownSelection",
+    "discussion",
+    "vocabulary",
+];
+
+/// replyType 是否已适配（未适配类型由 runner 生成报告并跳过提交）。
+pub fn is_known_reply_type(reply_type: &str) -> bool {
+    KNOWN_REPLY_TYPES.contains(&reply_type)
+}
+
+/// 同一道题向大模型提问 `llm_votes` 次，取多数；平票时把候选选项再问一次。
 pub async fn solve_module(session: &Session, m: &Module) -> Result<Vec<String>> {
+    let votes = session.cfg().llm_votes.clamp(1, 9);
+    // 只有"答案可枚举"的题型才投票；自由文本（翻译/简答/讨论）每次措辞不同，
+    // 投票没有意义，反而会因平票反复追加提问。
+    let votable = matches!(
+        m.reply_type.as_str(),
+        "singlechoice" | "multichoice" | "fillblank" | "bankedcloze" | "dropdownSelection"
+    ) || (m.reply_type.is_empty()
+        && m
+            .children
+            .iter()
+            .any(|c| matches!(c.reply_type.as_str(), "singlechoice" | "multichoice")));
+    if votes <= 1 || !votable || !session.cfg().use_llm() || m.children.is_empty() {
+        return solve_module_once(session, m).await;
+    }
+    log::info!(
+        "llm_votes={}：{} 个子题各作答 {} 次后投票",
+        votes,
+        m.children.len(),
+        votes
+    );
+    let mut runs: Vec<Vec<String>> = Vec::with_capacity(votes as usize);
+    for i in 0..votes {
+        match solve_module_once(session, m).await {
+            Ok(v) => runs.push(v),
+            Err(e) => {
+                if i == 0 {
+                    return Err(e);
+                }
+                log::warn!("第 {} 次作答失败，忽略该次投票: {:#}", i + 1, e);
+            }
+        }
+    }
+    if runs.is_empty() {
+        return solve_module_once(session, m).await;
+    }
+    let len = runs.iter().map(|r| r.len()).max().unwrap_or(0);
+    let mut out = Vec::with_capacity(len);
+    for idx in 0..len {
+        let vals: Vec<String> = runs.iter().filter_map(|r| r.get(idx).cloned()).collect();
+        out.push(vote_value(session, m, idx, &vals).await?);
+    }
+    Ok(out)
+}
+
+/// 多数投票；平票时追加一次带候选的提问。
+async fn vote_value(
+    session: &Session,
+    m: &Module,
+    idx: usize,
+    vals: &[String],
+) -> Result<String> {
+    let tally = tally(vals);
+    let max = tally.iter().map(|(_, c)| *c).max().unwrap_or(0);
+    if max == 0 {
+        return Ok(String::new());
+    }
+    let tied: Vec<String> = tally
+        .iter()
+        .filter(|(_, c)| *c == max)
+        .map(|(v, _)| v.clone())
+        .collect();
+    if tied.len() == 1 {
+        return Ok(tied[0].clone());
+    }
+    log::info!(
+        "第 {} 题投票平票（{:?}），追加提问裁决",
+        idx + 1,
+        tied
+    );
+    match tiebreak(session, m, idx, &tied).await {
+        Ok(Some(v)) => Ok(v),
+        Ok(None) => Ok(tied[0].clone()),
+        Err(e) => {
+            log::warn!("平票追加提问失败，取第一个候选: {:#}", e);
+            Ok(tied[0].clone())
+        }
+    }
+}
+
+/// 统计出现次数，按次数降序（同次数保持首次出现顺序）。
+fn tally(vals: &[String]) -> Vec<(String, usize)> {
+    let mut items: Vec<(String, usize)> = Vec::new();
+    for v in vals {
+        let k = v.trim().to_string();
+        if k.is_empty() {
+            continue;
+        }
+        if let Some(e) = items.iter_mut().find(|(x, _)| *x == k) {
+            e.1 += 1;
+        } else {
+            items.push((k, 1));
+        }
+    }
+    items.sort_by_key(|x| std::cmp::Reverse(x.1));
+    items
+}
+
+/// 平票时：把题目和候选答案再交给模型选一次。
+async fn tiebreak(
+    session: &Session,
+    m: &Module,
+    idx: usize,
+    tied: &[String],
+) -> Result<Option<String>> {
+    let Some(c) = m.children.get(idx) else {
+        return Ok(None);
+    };
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(ctx) = material_context(m) {
+        lines.push(ctx);
+        lines.push(String::new());
+    }
+    let qtext = if c.question_text.is_empty() {
+        "（题目见上方材料）".to_string()
+    } else {
+        truncate_text(&strip_html(&c.question_text), 1200)
+    };
+    lines.push(format!("题目：{}", qtext));
+    lines.push("候选答案：".to_string());
+    for t in tied {
+        let text = c
+            .options
+            .iter()
+            .find(|o| o.name == *t || o.value == *t)
+            .map(|o| truncate_text(&strip_html(&o.text), 120))
+            .unwrap_or_default();
+        if text.is_empty() {
+            lines.push(format!("- {}", t));
+        } else {
+            lines.push(format!("- {} {}", t, text));
+        }
+    }
+    lines.push(
+        "请在候选答案中选出最可能正确的一个，只输出该候选值，不要解释。".to_string(),
+    );
+    let prompt = lines.join("
+");
+    let ans = llm::ask(session, SYSTEM_PROMPT, &prompt).await?;
+    Ok(pick_candidate(&ans, tied))
+}
+
+/// 从模型回复里挑出候选答案。
+fn pick_candidate(ans: &str, tied: &[String]) -> Option<String> {
+    let a = ans.trim();
+    if a.is_empty() {
+        return None;
+    }
+    let norm = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_uppercase()
+    };
+    // 完全相同
+    if let Some(t) = tied.iter().find(|t| a.eq_ignore_ascii_case(t)) {
+        return Some(t.clone());
+    }
+    // 去掉标点后相同
+    let na = norm(a);
+    if let Some(t) = tied.iter().find(|t| norm(t) == na) {
+        return Some(t.clone());
+    }
+    // 包含候选（长候选优先，避免 A 误匹配 AB）
+    let mut cands: Vec<&String> = tied.iter().collect();
+    cands.sort_by_key(|t| std::cmp::Reverse(t.len()));
+    let up = a.to_uppercase();
+    for t in cands {
+        if up.contains(&t.to_uppercase()) {
+            return Some(t.clone());
+        }
+    }
+    None
+}
+
+/// 逐个模块求解一次，返回每个子题的作答值（按 children 顺序）。
+async fn solve_module_once(session: &Session, m: &Module) -> Result<Vec<String>> {
     // 无子题模块（vocabulary 单词卡朗读、视频弹题、纯阅读材料等）无需作答。
     if m.children.is_empty() {
         return Ok(Vec::new());
@@ -892,5 +1086,34 @@ mod tests {
         assert_eq!(all, vec!["a", "b", "c"]);
         let padded = shuffled_words(&words, 5);
         assert_eq!(padded.iter().filter(|s| s.is_empty()).count(), 2);
+    }
+
+    #[test]
+    fn tally_counts_and_orders() {
+        let vals = vec![
+            "A".to_string(),
+            "B".to_string(),
+            "A".to_string(),
+            "C".to_string(),
+            "A".to_string(),
+        ];
+        let t = tally(&vals);
+        assert_eq!(t[0], ("A".to_string(), 3));
+        assert_eq!(t.len(), 3);
+    }
+
+    #[test]
+    fn tally_ignores_empty() {
+        let vals = vec!["".to_string(), " ".to_string()];
+        assert!(tally(&vals).is_empty());
+    }
+
+    #[test]
+    fn pick_candidate_prefers_exact() {
+        let tied = vec!["A".to_string(), "AB".to_string()];
+        assert_eq!(pick_candidate("AB", &tied).as_deref(), Some("AB"));
+        assert_eq!(pick_candidate("a", &tied).as_deref(), Some("A"));
+        assert_eq!(pick_candidate("答案：AB。", &tied).as_deref(), Some("AB"));
+        assert_eq!(pick_candidate("nonsense", &tied), None);
     }
 }

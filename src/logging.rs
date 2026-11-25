@@ -1,4 +1,4 @@
-﻿use anyhow::{Context, Result};
+use anyhow::{Context, Result};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -127,14 +127,18 @@ pub fn cleanup_expired(dir: &Path, now_t: time::OffsetDateTime) -> usize {
     let mut removed = 0;
     for entry in rd.filter_map(|e| e.ok()) {
         let name = entry.file_name().to_string_lossy().to_string();
-        if !name.starts_with(FILE_PREFIX) || !name.ends_with(".log") {
+        if !name.ends_with(".log") {
             continue;
         }
-        let rest = &name[FILE_PREFIX.len()..];
-        if rest.len() < 15 {
+        // 用 strip_prefix 而非按字节切分：文件名可能含非 ASCII 字符。
+        let Some(rest) = name.strip_prefix(FILE_PREFIX) else {
             continue;
-        }
-        let Ok(ts) = PrimitiveDateTime::parse(&rest[..15], &fmt) else {
+        };
+        // 时间戳固定 15 个 ASCII 字节；非 ASCII 文件名时 get 返回 None，保留不删。
+        let Some(stamp) = rest.get(..15) else {
+            continue;
+        };
+        let Ok(ts) = PrimitiveDateTime::parse(stamp, &fmt) else {
             continue;
         };
         if now_prim < ts {
@@ -186,6 +190,23 @@ mod tests {
         assert!(recent.exists(), "当天日志应保留");
         assert!(other.exists(), "非 unipus-*.log 应保留");
         assert!(bad.exists(), "无法解析的文件名应保留");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cleanup_ignores_non_ascii_file_names() {
+        let dir = temp_dir("nonascii");
+        // 字节 15 落在多字节字符中间：时间戳切片必须安全，不能 panic
+        let weird = dir.join("unipus-a中中中中中中.log");
+        let plain = dir.join("unipus-中文中文中文中文中文中文.log");
+        for f in [&weird, &plain] {
+            fs::write(f, "x").unwrap();
+        }
+        let now = datetime!(2026-09-23 19:05:12).assume_utc();
+        let removed = cleanup_expired(&dir, now);
+        assert_eq!(removed, 0);
+        assert!(weird.exists(), "多字节字符跨切片位置的文件应保留");
+        assert!(plain.exists(), "中文文件名应保留");
         let _ = fs::remove_dir_all(&dir);
     }
 

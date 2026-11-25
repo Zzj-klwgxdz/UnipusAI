@@ -6,7 +6,8 @@ use crate::api::course::{
 use crate::api::parser::{Module, ParsedGroup, parse_group};
 use crate::api::session::Session;
 use crate::api::submit::{
-    RateLimited, build_answer_payload, build_mark_seen_payload, empty_answers, submit_raw,
+    RateLimited, SubmitScore, build_answer_payload, build_mark_seen_payload, empty_answers,
+    parse_submit_score, submit_raw,
 };
 use crate::reporter::{ReportEvent, Reporter};
 use anyhow::{Result, bail};
@@ -54,27 +55,69 @@ async fn submit_with_rate_retry(
     }
 }
 
+/// 任务处理结果。
+#[derive(Debug)]
+pub enum ProcessResult {
+    /// 已提交成功（resp 为 submit 响应；score 仅作答提交时解析）
+    Submitted {
+        resp: serde_json::Value,
+        score: Option<SubmitScore>,
+    },
+    /// 未提交（如未适配题型），reason 为给用户看的说明
+    Skipped { reason: String },
+}
+
 pub async fn process_group(
     session: &Session,
     task: &GroupTask,
     reporter: &dyn Reporter,
     cancel: &CancellationToken,
-) -> Result<serde_json::Value> {
+) -> Result<ProcessResult> {
     reporter.report(ReportEvent::TaskStart {
         group_id: task.group_id.clone(),
         tab_type: task.tab_type.clone(),
     });
-    let resp = process_group_inner(session, task, reporter, cancel).await?;
-    // 答题成功后同步 dump 状态（无对应记录则忽略）
-    if crate::dump::sync_task_status(session, task, true) {
-        log::debug!("dump 状态已更新: {} -> 已完成", task.group_id);
+    let result = process_group_inner(session, task, reporter, cancel).await?;
+    match &result {
+        ProcessResult::Submitted { resp, score } => {
+            // 答题成功后同步 dump 状态（无对应记录则忽略）
+            if crate::dump::sync_task_status(session, task, true) {
+                log::debug!("dump 状态已更新: {} -> 已完成", task.group_id);
+            }
+            if let Some(score) = score {
+                persist_last_score(session, &task.group_id, score);
+            }
+            reporter.report(ReportEvent::TaskDone {
+                group_id: task.group_id.clone(),
+                tab_type: task.tab_type.clone(),
+                detail: resp.to_string(),
+                score: score.clone(),
+            });
+        }
+        ProcessResult::Skipped { reason } => {
+            reporter.report(ReportEvent::TaskSkipped {
+                group_id: task.group_id.clone(),
+                reason: reason.clone(),
+            });
+        }
     }
-    reporter.report(ReportEvent::TaskDone {
-        group_id: task.group_id.clone(),
-        tab_type: task.tab_type.clone(),
-        detail: resp.to_string(),
+    Ok(result)
+}
+
+/// 把最近一次作答得分写入当前账号数据库（按课程隔离，供 TUI 重启后显示）。
+fn persist_last_score(session: &Session, group_id: &str, score: &SubmitScore) {
+    let key = format!("last_score:{}", session.course_id());
+    let payload = serde_json::json!({
+        "group_id": group_id,
+        "percent": score.percent,
+        "items": score.items,
+        "updated_at": crate::db::now_local_string(),
     });
-    Ok(resp)
+    let res = crate::db::open_site(crate::db::SITE_UNIPUS)
+        .and_then(|conn| crate::db::save_meta(&conn, &session.open_id(), &key, &payload.to_string()));
+    if let Err(e) = res {
+        log::warn!("保存提交得分失败: {:#}", e);
+    }
 }
 
 async fn process_group_inner(
@@ -82,7 +125,7 @@ async fn process_group_inner(
     task: &GroupTask,
     reporter: &dyn Reporter,
     cancel: &CancellationToken,
-) -> Result<serde_json::Value> {
+) -> Result<ProcessResult> {
     match task.tab_type.as_str() {
         "text" | "video" => {
             // 讨论题可能挂在 text/video 叶子下：尝试解析内容，检测到 discussion 则先发帖。
@@ -92,26 +135,44 @@ async fn process_group_inner(
                 post_discussion_comments(session, &task.group_id, &group).await?;
             }
             let payload = build_mark_seen_payload(session, &task.group_id)?;
-            submit_with_rate_retry(session, &payload, reporter, cancel).await
+            submit_with_rate_retry(session, &payload, reporter, cancel)
+                .await
+                .map(|resp| ProcessResult::Submitted { resp, score: None })
         }
         "task" => {
             let rt = fetch_content(session, &task.group_id).await?;
             let plain = decrypt_content(&rt.content, &rt.k)?;
             // 内容为空/非 JSON/无题目模块的“浏览类页面”：与浏览器一致，直接标记已看。
-            let group = match parse_decrypted(&plain)
+            let parsed = parse_decrypted(&plain)
                 .ok()
-                .and_then(|dec| parse_group(&dec).ok())
-            {
-                Some(group) => group,
+                .and_then(|dec| parse_group(&dec).ok().map(|group| (dec, group)));
+            let (decrypted, group) = match parsed {
+                Some(v) => v,
                 None => {
                     log::warn!(
                         "任务组 {} 内容为空/非题目模块，按“浏览即完成”标记已看",
                         task.group_id
                     );
                     let payload = build_mark_seen_payload(session, &task.group_id)?;
-                    return submit_with_rate_retry(session, &payload, reporter, cancel).await;
+                    return submit_with_rate_retry(session, &payload, reporter, cancel)
+                        .await
+                        .map(|resp| ProcessResult::Submitted { resp, score: None });
                 }
             };
+
+            // 未适配题型：只生成探针报告并跳过，不调用 LLM、不提交。
+            if let Some(un) = crate::probe::detect(&group) {
+                let reason = match crate::probe::report_auto(session, task, &un, &decrypted, &group)
+                {
+                    Ok(path) => format!("未适配题型 {}（报告: {}）", un.type_name, path.display()),
+                    Err(e) => {
+                        log::warn!("生成未适配题型报告失败: {:#}", e);
+                        format!("未适配题型 {}（报告生成失败: {:#}）", un.type_name, e)
+                    }
+                };
+                log::warn!("{}", reason);
+                return Ok(ProcessResult::Skipped { reason });
+            }
 
             if group.modules.iter().any(|m| m.reply_type == "discussion") {
                 post_discussion_comments(session, &task.group_id, &group).await?;
@@ -133,7 +194,9 @@ async fn process_group_inner(
             // 无可答模块（纯讨论/单词卡朗读/视频弹题等）：与浏览器一致，空 quesDatas + submitType=2 标记完成。
             if !has_answerable_module(&group) {
                 let payload = build_mark_seen_payload(session, &task.group_id)?;
-                return submit_with_rate_retry(session, &payload, reporter, cancel).await;
+                return submit_with_rate_retry(session, &payload, reporter, cancel)
+                    .await
+                    .map(|resp| ProcessResult::Submitted { resp, score: None });
             }
 
             // 混合组：剔除 discussion 模块后按普通答案提交。
@@ -146,7 +209,9 @@ async fn process_group_inner(
             modules.retain(|m| !discussion_ids.contains(m.instance_id.as_str()));
 
             let payload = build_answer_payload(session, &task.group_id, &modules)?;
-            submit_with_rate_retry(session, &payload, reporter, cancel).await
+            let resp = submit_with_rate_retry(session, &payload, reporter, cancel).await?;
+            let score = parse_submit_score(&resp);
+            Ok(ProcessResult::Submitted { resp, score })
         }
         other => bail!("未知 tab_type: {}", other),
     }
@@ -273,8 +338,12 @@ pub async fn run_course_units(
                 continue;
             }
             match process_group(session, task, reporter, cancel).await {
-                Ok(_) => {
+                Ok(ProcessResult::Submitted { .. }) => {
                     summary.done += 1;
+                }
+                Ok(ProcessResult::Skipped { .. }) => {
+                    // 未适配题型等：已在上层报告 TaskSkipped，这里只计数
+                    summary.skipped += 1;
                 }
                 Err(e) => {
                     if cancel.is_cancelled() {

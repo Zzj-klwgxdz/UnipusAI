@@ -41,7 +41,7 @@ fn media_count(group: &ParsedGroup) -> usize {
     group.modules.iter().map(|m| m.media_sources.len()).sum()
 }
 
-/// 导出题目文本与媒体转写（不答题、不提交）到 SQLite（dump_text/dump.db）。
+/// 导出题目文本与媒体转写（不答题、不提交）到平台库（dump_text/unipusai.db）。
 /// 所有叶子全量归档；浏览类页面（内容为空/非 JSON/无模块）按 view-only 保存。
 pub async fn run_dump_text(
     session: &Session,
@@ -50,18 +50,18 @@ pub async fn run_dump_text(
     cancel: &CancellationToken,
 ) -> Result<DumpSummary> {
     let open_id = session.open_id();
-    let mut conn = db::open_for(&open_id)?;
+    let mut conn = db::open_site(db::SITE_UNIPUS)?;
     if opts.force {
-        db::clear_all(&conn)?;
+        db::clear_all(&conn, &open_id)?;
     }
     let course_id = session.course_id().to_string();
 
     // 记录课程信息（meta），供 TUI 离线显示课程名；单任务重抓时跳过
     if opts.group_ids.is_empty() {
         let name = crate::api::course::course_display_name(session, session.course_id()).await;
-        let _ = db::save_meta(&conn, "course_id", &course_id);
-        let _ = db::save_meta(&conn, "course_name", &name);
-        let _ = db::save_meta(&conn, &format!("course_name:{}", course_id), &name);
+        let _ = db::save_meta(&conn, &open_id, "course_id", &course_id);
+        let _ = db::save_meta(&conn, &open_id, "course_name", &name);
+        let _ = db::save_meta(&conn, &open_id, &format!("course_name:{}", course_id), &name);
     }
 
     if opts.with_names {
@@ -87,7 +87,7 @@ pub async fn run_dump_text(
         units: units.len(),
         ..Default::default()
     };
-    let db_path = dump::db_path_for(&open_id).display().to_string();
+    let db_path = db::db_path_for_site(db::SITE_UNIPUS).display().to_string();
 
     'units: for (ui, uid) in units.iter().enumerate() {
         if cancel.is_cancelled() {
@@ -121,16 +121,17 @@ pub async fn run_dump_text(
             // 已入库：仅刷新状态（状态未变不写库），不重新抓题；
             // 旧库缺少 raw_json / course_id 不匹配时重新抓取补全
             if !only_mode
-                && db::task_exists(&conn, uid, gid)?
-                && !db::task_needs_refresh(&conn, uid, gid, &course_id)?
+                && db::task_exists(&conn, &open_id, uid, gid)?
+                && !db::task_needs_refresh(&conn, &open_id, uid, gid, &course_id)?
             {
                 summary.skipped += 1;
-                let changed = db::task_status(&conn, uid, gid)?
+                let changed = db::task_status(&conn, &open_id, uid, gid)?
                     .map(|(old_req, old_passed)| old_req != required || old_passed != passed)
                     .unwrap_or(true);
                 if changed
                     && db::update_status(
                         &conn,
+                        &open_id,
                         uid,
                         gid,
                         unit_no,
@@ -201,6 +202,7 @@ pub async fn run_dump_text(
                 };
                 db::save_task(
                     &mut conn,
+                    &open_id,
                     &TaskInput {
                         unit_index: unit_no,
                         unit_id: uid,
@@ -265,6 +267,7 @@ pub async fn run_dump_text(
 
             db::save_task(
                 &mut conn,
+                &open_id,
                 &TaskInput {
                     unit_index: unit_no,
                     unit_id: uid,
@@ -295,6 +298,6 @@ pub async fn run_dump_text(
         }
     }
 
-    summary.total_files = db::task_count(&conn, &course_id)?;
+    summary.total_files = db::task_count(&conn, &open_id, &course_id)?;
     Ok(summary)
 }

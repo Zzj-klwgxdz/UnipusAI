@@ -2,7 +2,7 @@ use crate::api::course::GroupTask;
 use crate::api::parser::ParsedGroup;
 use anyhow::Result;
 
-/// dump 数据目录（存放 SQLite 数据库 dump.db）。
+/// dump 数据目录（存放每平台一个 SQLite 数据库）。
 pub const DUMP_DIR: &str = "dump_text";
 
 /// 浏览类页面（内容为空/非 JSON/无题目模块）的 kind 标识。
@@ -39,28 +39,28 @@ pub fn sanitize_dir_name(s: &str) -> String {
         .collect()
 }
 
-/// 默认数据库路径（未登录/旧版）。
+/// 旧版单库路径（仅兼容保留，不再写入）。
 pub fn db_path() -> std::path::PathBuf {
     crate::db::db_path()
 }
 
 /// 当前账号的数据库路径。
-pub fn db_path_for(open_id: &str) -> std::path::PathBuf {
-    crate::db::db_path_for(open_id)
+pub fn db_path_for(_open_id: &str) -> std::path::PathBuf {
+    crate::db::db_path_for_site(crate::db::SITE_UNIPUS)
 }
 
 /// 实时生成指定账号+课程的 dump 汇总文本（空库返回 None）。
 pub fn summary_text(open_id: &str, course_id: &str) -> Result<Option<String>> {
-    let conn = crate::db::open_for(open_id)?;
-    crate::db::summary_text(&conn, course_id)
+    let conn = crate::db::open_site(crate::db::SITE_UNIPUS)?;
+    crate::db::summary_text(&conn, open_id, course_id)
 }
 
 /// 将任务完成情况同步到当前账号数据库（供 run/group 提交成功后调用）；
 /// 数据库中无该任务返回 false。
 pub fn sync_task_status(session: &crate::api::session::Session, task: &GroupTask, passed: bool) -> bool {
-    match crate::db::open_for(&session.open_id()) {
+    match crate::db::open_site(crate::db::SITE_UNIPUS) {
         Ok(conn) => {
-            crate::db::set_passed(&conn, &task.unit_id, &task.group_id, passed).unwrap_or(false)
+            crate::db::set_passed(&conn, &session.open_id(), &task.unit_id, &task.group_id, passed).unwrap_or(false)
         }
         Err(e) => {
             log::warn!("同步 dump 状态失败: {:#}", e);

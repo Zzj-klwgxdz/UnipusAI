@@ -1,3 +1,4 @@
+use crate::api::submit::SubmitScore;
 use std::sync::Arc;
 
 /// dump-text 生成事件类型。
@@ -28,6 +29,8 @@ pub enum ReportEvent {
         group_id: String,
         tab_type: String,
         detail: String,
+        /// 作答提交的判分（标记已看/讨论为 None）
+        score: Option<SubmitScore>,
     },
     /// 任务跳过（已通过等）
     TaskSkipped { group_id: String, reason: String },
@@ -101,7 +104,14 @@ impl Reporter for PrintReporter {
                 group_id,
                 tab_type,
                 detail,
-            } => log::info!("[OK] {} {} -> {}", tab_type, group_id, detail),
+                score,
+            } => {
+                match &score {
+                    Some(s) => log::info!("[SCORE] {} 提交后得分 {}", group_id, s.display()),
+                    None => log::info!("[SCORE] {} 无判分数据（标记已看/讨论）", group_id),
+                }
+                log::info!("[OK] {} {} -> {}", tab_type, group_id, detail)
+            }
             ReportEvent::TaskFailed {
                 group_id,
                 tab_type,

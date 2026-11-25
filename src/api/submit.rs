@@ -35,6 +35,125 @@ pub fn is_rate_limited(v: &Value) -> bool {
     msg_limited || code_limited
 }
 
+/// 提交响应中的判分信息。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SubmitScore {
+    /// 各小题得分（原始值，通常 0..1 或 0..100）。
+    pub items: Vec<f64>,
+    /// 百分比得分（0..100）；None 表示响应中无百分比。
+    pub percent: Option<f64>,
+}
+
+impl SubmitScore {
+    /// 展示用文本：`100%（各题 1/1/1/1/1/1）`。
+    pub fn display(&self) -> String {
+        let mut out = match self.percent {
+            Some(p) => format_percent(p),
+            None => "未知".to_string(),
+        };
+        if !self.items.is_empty() {
+            out.push_str("（各题 ");
+            let shown: Vec<String> = self.items.iter().take(12).map(|v| fmt_score(*v)).collect();
+            out.push_str(&shown.join("/"));
+            if self.items.len() > 12 {
+                out.push_str(&format!("…(+{})", self.items.len() - 12));
+            }
+            out.push('）');
+        }
+        out
+    }
+}
+
+/// 从 submit 响应提取判分（`data.state.score` / `score_pct` / `record_grade.scorePct` 等）。
+pub fn parse_submit_score(v: &Value) -> Option<SubmitScore> {
+    let state = v.pointer("/data/state");
+    let mut items = Vec::new();
+    if let Some(score) = state.and_then(|s| s.get("score")) {
+        collect_scores(score, &mut items);
+    }
+    let percent = state
+        .and_then(|s| s.get("score_pct"))
+        .and_then(value_f64)
+        .or_else(|| {
+            state
+                .and_then(|s| s.get("real_score_pct"))
+                .and_then(value_f64)
+        })
+        .or_else(|| {
+            v.pointer("/data/record_grade/scorePct")
+                .and_then(value_f64)
+        })
+        .or_else(|| state.and_then(|s| s.get("score_avg")).and_then(value_f64))
+        .map(normalize_percent)
+        .or_else(|| {
+            if items.is_empty() {
+                None
+            } else {
+                let mean = items.iter().sum::<f64>() / items.len() as f64;
+                Some(normalize_percent(mean))
+            }
+        });
+    if items.is_empty() && percent.is_none() {
+        return None;
+    }
+    Some(SubmitScore { items, percent })
+}
+
+fn value_f64(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn collect_scores(v: &Value, out: &mut Vec<f64>) {
+    match v {
+        Value::Array(arr) => {
+            for x in arr {
+                if let Some(n) = value_f64(x) {
+                    out.push(n);
+                }
+            }
+        }
+        Value::Object(map) => {
+            for x in map.values() {
+                if let Some(n) = value_f64(x) {
+                    out.push(n);
+                }
+            }
+        }
+        _ => {
+            if let Some(n) = value_f64(v) {
+                out.push(n);
+            }
+        }
+    }
+}
+
+/// 0..1 视为比例（×100），其余视为已是百分比；限制在 0..=100。
+fn normalize_percent(v: f64) -> f64 {
+    let pct = if v <= 1.0 { v * 100.0 } else { v };
+    (pct.clamp(0.0, 100.0) * 10.0).round() / 10.0
+}
+
+fn format_percent(p: f64) -> String {
+    if (p - p.round()).abs() < 0.05 {
+        format!("{:.0}%", p.round())
+    } else {
+        format!("{:.1}%", p)
+    }
+}
+
+fn fmt_score(v: f64) -> String {
+    if (v - v.round()).abs() < 0.005 {
+        format!("{:.0}", v.round())
+    } else {
+        let s = format!("{:.2}", v);
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
 /// 子题作答。
 #[derive(Debug, Clone)]
 pub struct ChildAnw {
@@ -209,9 +328,22 @@ pub fn empty_answers(group: &ParsedGroup) -> Vec<ModuleAnsw> {
 }
 
 pub async fn submit_raw(session: &Session, payload: &str) -> Result<Value> {
-    let (status, body) = session.post_raw(submit_url(), payload).await?;
+    // 服务端偶发 503（openresty 限流/WAF），退避重试几次
+    let mut attempt = 0u32;
+    let (status, body) = loop {
+        let (s, b) = session.post_raw(submit_url(), payload).await?;
+        if s.is_server_error() && attempt < 3 {
+            attempt += 1;
+            let wait = std::time::Duration::from_secs(2u64.pow(attempt));
+            log::warn!("submit 返回 {}，{}s 后重试（{}/3）", s, wait.as_secs(), attempt);
+            tokio::time::sleep(wait).await;
+            continue;
+        }
+        break (s, b);
+    };
     if !status.is_success() {
-        anyhow::bail!("submit HTTP {}", status);
+        let brief: String = body.chars().take(300).collect();
+        anyhow::bail!("submit HTTP {}: {}", status, brief);
     }
     let v: Value = serde_json::from_str(&body)?;
     let code = v.get("code").and_then(|c| c.as_i64());
@@ -267,5 +399,52 @@ mod tests {
         let s = build_answer_json(&[c]);
         let v: Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v["children"][0]["value"], serde_json::json!(["B"]));
+    }
+
+    #[test]
+    fn score_parses_real_submit_response() {
+        // 实际 dropdownSelection 提交响应（节选）
+        let v: Value = serde_json::from_str(
+            r#"{"code":0,"data":{"record_grade":{"scorePct":1,"ts":1792403102},
+                "state":{"score":[1,1,1,1,1,1],"score_avg":100,"score_pct":1,"state":1}},"message":"成功"}"#,
+        )
+        .unwrap();
+        let s = parse_submit_score(&v).unwrap();
+        assert_eq!(s.items, vec![1.0; 6]);
+        assert_eq!(s.percent, Some(100.0));
+        assert_eq!(s.display(), "100%（各题 1/1/1/1/1/1）");
+    }
+
+    #[test]
+    fn score_falls_back_and_tolerates_types() {
+        // 无 state.score，仅 record_grade.scorePct（0..1）
+        let v = json!({"data":{"record_grade":{"scorePct":0.8}}});
+        let s = parse_submit_score(&v).unwrap();
+        assert_eq!(s.percent, Some(80.0));
+        assert!(s.items.is_empty());
+
+        // 字符串/浮点混合 + score_avg 兜底（已是百分比）
+        let v = json!({"data":{"state":{"score":["0.5", 1, null], "score_avg":"85"}}});
+        let s = parse_submit_score(&v).unwrap();
+        assert_eq!(s.items, vec![0.5, 1.0]);
+        assert_eq!(s.percent, Some(85.0));
+        assert_eq!(s.display(), "85%（各题 0.5/1）");
+
+        // 无任何判分数据
+        assert!(parse_submit_score(&json!({"code":0,"data":null})).is_none());
+        assert!(parse_submit_score(&json!({"code":0,"data":{"state":{"score":[]}}})).is_none());
+    }
+
+    #[test]
+    fn score_display_truncates_long_item_list() {
+        let s = SubmitScore {
+            items: (0..15)
+                .map(|i| if i == 0 { 1.0 } else { 0.5 })
+                .collect(),
+            percent: Some(66.7),
+        };
+        let text = s.display();
+        assert!(text.starts_with("66.7%"), "{}", text);
+        assert!(text.contains("…(+3)"), "{}", text);
     }
 }

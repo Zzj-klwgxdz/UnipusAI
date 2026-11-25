@@ -7,6 +7,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::preview::Preview;
 use crate::reporter::ReportEvent;
 
+use super::app::PlatformTab;
 use super::app::{App, AppEvent, ButtonId, Confirm, ConfirmAction, Focus, MouseAction, RunScope, Screen};
 
 impl App {
@@ -131,6 +132,14 @@ impl App {
                     self.push_log(Level::Error, format!("生成草稿失败: {}", e));
                 }
             },
+            AppEvent::Cx(ev) => {
+                let account = crate::tui::cx::account(self.session.cfg());
+                crate::tui::cx::apply(&mut self.cx, ev, Some(&account));
+            }
+            AppEvent::Zs(ev) => {
+                let _account = crate::tui::zhs::account(self.session.cfg());
+                crate::tui::zhs::apply(&mut self.zs, ev);
+            }
             AppEvent::CoursesLoaded(res) => {
                 self.courses.loading = false;
                 match res {
@@ -206,8 +215,15 @@ impl App {
             }
         }
         match re {
-            ReportEvent::TaskDone { group_id, .. } => {
+            ReportEvent::TaskDone { group_id, score, .. } => {
+                if let Some(s) = &score {
+                    self.push_log(Level::Info, format!("[SCORE] {} {}", group_id, s.display()));
+                    self.last_score = Some((group_id.clone(), s.clone()));
+                }
                 self.push_log(Level::Info, format!("[OK] {}", group_id))
+            }
+            ReportEvent::TaskSkipped { group_id, reason } => {
+                self.push_log(Level::Warn, format!("[SKIP] {} {}", group_id, reason))
             }
             ReportEvent::TaskFailed { group_id, error, .. } => {
                 self.push_log(Level::Error, format!("[FAIL] {} -> {}", group_id, error))
@@ -286,6 +302,35 @@ impl App {
         // 全局退出
         if k.modifiers.contains(KeyModifiers::CONTROL) && matches!(k.code, KeyCode::Char('c')) {
             self.quit = true;
+            return;
+        }
+        // 标签页切换：F1 = U 校园，F2 = 学习通
+        match k.code {
+            KeyCode::F(1) => {
+                self.switch_tab(PlatformTab::Unipus, tx);
+                return;
+            }
+            KeyCode::F(2) => {
+                self.switch_tab(PlatformTab::Chaoxing, tx);
+                return;
+            }
+            KeyCode::F(3) => {
+                self.switch_tab(PlatformTab::Zhihuishu, tx);
+                return;
+            }
+            _ => {}
+        }
+        // 学习通标签页激活时，按键交给它（互不干扰）
+        if self.tab == PlatformTab::Zhihuishu {
+            let cfg = self.session.cfg().clone();
+            let _ = crate::tui::zhs::handle_key(&mut self.zs, k, &cfg, tx);
+            return;
+        }
+        if self.tab == PlatformTab::Chaoxing {
+            let cfg = self.session.cfg().clone();
+            let path = self.session.config_path().clone();
+            let _ = crate::tui::cx::handle_key(&mut self.cx, k, &cfg, &path, tx);
+            // 学习通页的未识别按键不再落到 U 校园逻辑（F1/F2/Ctrl+C 已在上方处理）
             return;
         }
         match self.screen {
@@ -459,9 +504,14 @@ impl App {
         }
         match self.session.update_config(cfg) {
             Ok(()) => {
-                if let Ok(conn) = crate::db::open_for(&self.session.open_id()) {
-                    let _ =
-                        crate::db::save_meta(&conn, &format!("course_name:{}", c.course_id), &c.name);
+                self.last_score = super::app::load_last_score(&self.session);
+                if let Ok(conn) = crate::db::open_site(crate::db::SITE_UNIPUS) {
+                    let _ = crate::db::save_meta(
+                        &conn,
+                        &self.session.open_id(),
+                        &format!("course_name:{}", c.course_id),
+                        &c.name,
+                    );
                 }
                 self.status = format!("已选择课程: {}", c.name);
                 self.screen = Screen::Dashboard;
@@ -512,7 +562,11 @@ impl App {
             KeyCode::Char('w') => self.save_config(tx),
             KeyCode::Enter | KeyCode::Char(' ') => {
                 let idx = self.settings.cursor;
-                match super::app::FIELDS[idx].kind {
+                // 越界（配置字段表变更/光标来自旧状态）时忽略，避免索引 panic。
+                let Some(field) = super::app::FIELDS.get(idx) else {
+                    return;
+                };
+                match field.kind {
                     super::app::FieldKind::Bool => {
                         let v = self.settings.value(idx) == "true";
                         self.settings.set_value(idx, if v { "false" } else { "true" });
@@ -637,7 +691,49 @@ impl App {
         }
     }
 
+    /// 切换平台标签页（键盘/鼠标共用）。
+    fn switch_tab(&mut self, tab: PlatformTab, tx: &UnboundedSender<AppEvent>) {
+        self.tab = tab;
+        match tab {
+            PlatformTab::Chaoxing => {
+                let cfg = self.session.cfg().clone();
+                let path = self.session.config_path().clone();
+                self.cx.ensure_loaded(&cfg, &path, tx);
+            }
+            PlatformTab::Zhihuishu => {
+                if !self.zs.loaded && !self.zs.loading {
+                    self.zs.loading = true;
+                    self.zs.status = "加载中…".into();
+                    crate::tui::zhs::spawn_load(self.session.cfg().clone(), tx.clone());
+                }
+            }
+            PlatformTab::Unipus => {}
+        }
+    }
+
     fn handle_mouse(&mut self, m: MouseEvent, tx: &UnboundedSender<AppEvent>) {
+        // 平台标签页：先处理标签栏点击，再把鼠标交给对应页面
+        if self.tab != PlatformTab::Unipus {
+            if matches!(m.kind, MouseEventKind::Down(MouseButton::Left))
+                && let Some(MouseAction::SwitchTab(tab)) = self.hit(m.column, m.row)
+            {
+                self.switch_tab(tab, tx);
+                return;
+            }
+            let cfg = self.session.cfg().clone();
+            let path = self.session.config_path().clone();
+            let handled = match self.tab {
+                PlatformTab::Chaoxing => {
+                    crate::tui::cx::handle_mouse(&mut self.cx, &m, &cfg, &path, tx)
+                }
+                PlatformTab::Zhihuishu => crate::tui::zhs::handle_mouse(&mut self.zs, &m, &cfg, tx),
+                PlatformTab::Unipus => false,
+            };
+            if handled || matches!(m.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)
+            {
+                return;
+            }
+        }
         match m.kind {
             MouseEventKind::ScrollUp => {
                 if let Some(action) = self.hit(m.column, m.row) {
@@ -722,6 +818,7 @@ impl App {
                         }
                     }
                     MouseAction::Button(id) => self.on_button(id, tx),
+                    MouseAction::SwitchTab(tab) => self.switch_tab(tab, tx),
                 }
             }
             _ => {}

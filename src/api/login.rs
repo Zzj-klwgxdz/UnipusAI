@@ -102,6 +102,12 @@ fn base64url_nopad(data: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
 }
 
+/// 密钥展示用截断：按字符取前 8 个。
+/// 不能按字节切片（`&key[..8]`），否则手动填了中文的 `annotator_key` 会 panic。
+pub fn mask_key(key: &str) -> String {
+    key.chars().take(8).collect()
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -193,7 +199,7 @@ pub async fn extract_annotator_params() -> Result<AnnotatorParams> {
                     p.iss,
                     p.aud,
                     p.ttl_ms,
-                    &p.key[..p.key.len().min(8)]
+                    mask_key(&p.key)
                 );
                 return Ok(p);
             }
@@ -203,25 +209,33 @@ pub async fn extract_annotator_params() -> Result<AnnotatorParams> {
     bail!("未在 bundle 中找到 annotator 签发参数（最后检查: {}）", last_err)
 }
 
-/// 从页面 HTML 中抽取相对/绝对 JS 脚本地址。
-fn extract_script_srcs(html: &str) -> Vec<String> {
+/// 从页面 HTML 中抽取相对/绝对 JS 脚本地址（兼容 `src="..."` 与无引号 `src=...`）。
+pub(crate) fn extract_script_srcs(html: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut rest = html;
     while let Some(i) = rest.find("src=") {
         rest = &rest[i + 4..];
         let trimmed = rest.trim_start();
-        let quote = trimmed.chars().next().unwrap_or(' ');
-        if quote != '"' && quote != '\'' {
-            continue;
+        let Some(first) = trimmed.chars().next() else {
+            break;
+        };
+        let (src, advance) = if first == '"' || first == '\'' {
+            let body = &trimmed[1..];
+            let Some(end) = body.find(first) else {
+                break;
+            };
+            (&body[..end], 1 + end + 1)
+        } else {
+            let end = trimmed
+                .find(|c: char| c.is_whitespace() || c == '>')
+                .unwrap_or(trimmed.len());
+            (&trimmed[..end], end)
+        };
+        let src = src.trim();
+        if src.ends_with(".js") {
+            out.push(src.to_string());
         }
-        rest = &trimmed[1..];
-        if let Some(end) = rest.find(quote) {
-            let src = &rest[..end];
-            rest = &rest[end..];
-            if src.ends_with(".js") {
-                out.push(src.to_string());
-            }
-        }
+        rest = &trimmed[advance.min(trimmed.len())..];
     }
     out
 }
@@ -738,6 +752,16 @@ mod tests {
                 "question-data-e421babb.js".to_string()
             ]
         );
+        // 无引号（ucontent pc.html 实际格式）
+        let html = r#"<script src=https://a/y.js></script><script src=question-9f8dfb23.js></script><script src='https://b/z.js'></script>"#;
+        assert_eq!(
+            extract_script_srcs(html),
+            vec![
+                "https://a/y.js".to_string(),
+                "question-9f8dfb23.js".to_string(),
+                "https://b/z.js".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -748,11 +772,9 @@ mod tests {
                 .encode(serde_json::json!({"username": u, "openId": "o"}).to_string());
             format!("x.{}.y", p)
         };
-        let mut cfg = Config {
-            username: "111".into(),
-            cookie: format!("jwt={}", mk("111")),
-            ..Default::default()
-        };
+        let mut cfg = Config::default();
+        cfg.unipusai.username = "111".into();
+        cfg.unipusai.cookie = format!("jwt={}", mk("111"));
         assert!(!account_switched(&cfg));
         cfg.cookie = format!("jwt={}", mk("222"));
         assert!(account_switched(&cfg), "用户名与 jwt 不一致应判定为已切换");
@@ -799,5 +821,14 @@ mod tests {
         let captcha = serde_json::json!({"code": "1506", "msg": "need check"});
         let err = parse_credentials(&captcha, "登录").unwrap_err().to_string();
         assert!(err.contains("滑块验证"), "{}", err);
+    }
+
+    #[test]
+    fn mask_key_truncates_by_chars() {
+        assert_eq!(mask_key("a824b379f126b8b7"), "a824b379");
+        // 中文密钥按字符截断，不能按字节切片（否则会 panic）
+        assert_eq!(mask_key("中文密钥abcdef"), "中文密钥abcd");
+        assert_eq!(mask_key("短"), "短");
+        assert_eq!(mask_key(""), "");
     }
 }

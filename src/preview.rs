@@ -53,8 +53,8 @@ pub async fn load_preview(session: &Session, group_id: &str) -> Result<Preview> 
 
 /// 从当前账号数据库读取任务组预览（TUI 用）；库中无该任务返回 None。
 pub fn load_preview_from_db(open_id: &str, group_id: &str) -> Result<Option<Preview>> {
-    let conn = crate::db::open_for(open_id)?;
-    let Some(st) = crate::db::load_stored(&conn, group_id)? else {
+    let conn = crate::db::open_site(crate::db::SITE_UNIPUS)?;
+    let Some(st) = crate::db::load_stored(&conn, open_id, group_id)? else {
         return Ok(None);
     };
     let group = if st.kind == "task" {
@@ -190,6 +190,7 @@ mod tests {
         }];
         crate::db::save_task(
             &mut conn,
+            "acc",
             &TaskInput {
                 unit_index: 1,
                 unit_id: "u1",
@@ -210,7 +211,7 @@ mod tests {
         )
         .unwrap();
 
-        let st = crate::db::load_stored(&conn, "g1").unwrap().unwrap();
+        let st = crate::db::load_stored(&conn, "acc", "g1").unwrap().unwrap();
         let rebuilt = rebuild_group(&st);
         assert_eq!(rebuilt.modules.len(), 1);
         let m = &rebuilt.modules[0];
